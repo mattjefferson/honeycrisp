@@ -40,6 +40,13 @@ struct NoteDetail: Codable {
     let title: String
     let created: String
     let modified: String
+    let account: String?
+    let folder: String?
+    let folderPath: String?
+    let shared: Bool?
+    let folderShared: Bool?
+    let tags: [String]?
+    let attachments: [AttachmentDetail]?
     let body: String
     let format: String?
     let assets: [String]?
@@ -66,6 +73,40 @@ struct ExportResult: Codable {
 struct NoteMatch {
     let id: String
     let title: String
+}
+
+struct AttachmentDetail: Codable {
+    let name: String
+    let created: String?
+    let modified: String?
+    let url: String?
+    let shared: Bool?
+}
+
+struct NoteSearchResult: Codable {
+    let title: String
+    let created: String
+    let modified: String
+    let account: String?
+    let folder: String?
+    let folderPath: String?
+    let shared: Bool?
+    let folderShared: Bool?
+    let tags: [String]?
+    let attachments: [AttachmentDetail]?
+}
+
+struct NoteParsedDetail {
+    let title: String
+    let created: String
+    let modified: String
+    let account: String?
+    let folder: String?
+    let folderPath: String?
+    let shared: Bool?
+    let folderShared: Bool?
+    let attachments: [AttachmentDetail]
+    let body: String
 }
 
 struct MarkdownConversionResult {
@@ -218,8 +259,37 @@ struct Honeycrisp {
         let output = try AppleScript.run(script)
         let notes = uniqueNotesByID(parseNoteSummaries(output))
         if wantsJSON(parsed) {
-            let summaries = notes.map { NoteSummary(title: $0.title) }
-            try outputJSON(summaries)
+            var results: [NoteSearchResult] = []
+            results.reserveCapacity(notes.count)
+            for note in notes {
+                let detailOutput = try AppleScript.run(AppleScript.showNote(id: note.id))
+                if detailOutput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    continue
+                }
+                let detail = try parseNoteDetail(detailOutput)
+                let plain = htmlToPlainText(detail.body, title: detail.title)
+                let notePlaintext = try? AppleScript.run(AppleScript.getNotePlaintext(id: note.id))
+                let tagSource = notePlaintext?.isEmpty == false ? notePlaintext! : plain
+                var tags = extractTags(from: tagSource)
+                if tags.isEmpty {
+                    tags = extractTagsFromHTML(detail.body)
+                }
+                let attachments = detail.attachments.isEmpty ? nil : detail.attachments
+                let result = NoteSearchResult(
+                    title: detail.title,
+                    created: detail.created,
+                    modified: detail.modified,
+                    account: detail.account,
+                    folder: detail.folder,
+                    folderPath: detail.folderPath,
+                    shared: detail.shared,
+                    folderShared: detail.folderShared,
+                    tags: tags.isEmpty ? nil : tags,
+                    attachments: attachments
+                )
+                results.append(result)
+            }
+            try outputJSON(results)
             return
         }
         if notes.isEmpty { return }
@@ -245,8 +315,15 @@ struct Honeycrisp {
         let wantsMarkdown = parsed.flags.contains("--markdown")
         var assets: [String] = []
         var hadAttachments = false
+        let notePlaintext = try? AppleScript.run(AppleScript.getNotePlaintext(id: noteID))
+        let plainText = htmlToPlainText(detail.body, title: detail.title)
+        let tagSource = notePlaintext?.isEmpty == false ? notePlaintext! : plainText
+        var tags = extractTags(from: tagSource)
+        if tags.isEmpty {
+            tags = extractTagsFromHTML(detail.body)
+        }
         let bodyText: String
-        let attachmentCount = countEmbeddedImages(detail.body)
+        let attachmentCount = detail.attachments.isEmpty ? countEmbeddedImages(detail.body) : detail.attachments.count
 
         if wantsMarkdown {
             let assetsDirOption = try optionValue(parsed, "--assets-dir")
@@ -261,12 +338,14 @@ struct Honeycrisp {
             }
         } else {
             let treatAsChecklist = htmlLooksLikeChecklist(detail.body)
-            bodyText = htmlToPlainText(
+            let converted = htmlToPlainText(
                 detail.body,
                 title: detail.title,
                 includeImagePlaceholders: true,
                 normalizeLists: treatAsChecklist
             )
+            let fallbackText = notePlaintext ?? ""
+            bodyText = fillEmptyBullets(in: converted, using: fallbackText, tags: tags)
         }
 
         if wantsJSON(parsed) {
@@ -274,6 +353,13 @@ struct Honeycrisp {
                 title: detail.title,
                 created: detail.created,
                 modified: detail.modified,
+                account: detail.account,
+                folder: detail.folder,
+                folderPath: detail.folderPath,
+                shared: detail.shared,
+                folderShared: detail.folderShared,
+                tags: tags.isEmpty ? nil : tags,
+                attachments: detail.attachments.isEmpty ? nil : detail.attachments,
                 body: bodyText,
                 format: wantsMarkdown ? "markdown" : "text",
                 assets: assets.isEmpty ? nil : assets
@@ -289,6 +375,12 @@ struct Honeycrisp {
                 title: detail.title,
                 created: detail.created,
                 modified: detail.modified,
+                account: detail.account,
+                folder: detail.folder,
+                folderPath: detail.folderPath,
+                shared: detail.shared,
+                folderShared: detail.folderShared,
+                tags: tags,
                 body: bodyText,
                 attachmentCount: attachmentCount
             )
@@ -524,7 +616,7 @@ struct Honeycrisp {
     static func resolveNoteIDByTitle(_ title: String, account: String?, folder: String?) throws -> String {
         let script = AppleScript.findNotesByTitle(title: title, folder: folder, account: account)
         let output = try AppleScript.run(script)
-        let matches = parseNoteSummaries(output)
+        let matches = uniqueNotesByID(parseNoteSummaries(output))
         if matches.isEmpty {
             throw CLIError(message: "No note found with title: \(title)")
         }
@@ -842,11 +934,39 @@ struct Honeycrisp {
         return children.map { $0.xmlString }.joined()
     }
 
-    static func formatShowText(title: String, created: String, modified: String, body: String, attachmentCount: Int) -> String {
+    static func formatShowText(
+        title: String,
+        created: String,
+        modified: String,
+        account: String?,
+        folder: String?,
+        folderPath: String?,
+        shared: Bool?,
+        folderShared: Bool?,
+        tags: [String],
+        body: String,
+        attachmentCount: Int
+    ) -> String {
         var lines: [String] = []
         lines.append("name:\t\(title)")
         lines.append("created:\t\(created)")
         lines.append("modified:\t\(modified)")
+        if let account, !account.isEmpty {
+            lines.append("account:\t\(account)")
+        }
+        let folderDisplay = folderPath ?? folder
+        if let folderDisplay, !folderDisplay.isEmpty {
+            lines.append("folder:\t\(folderDisplay)")
+        }
+        if let shared {
+            lines.append("shared:\t\(shared ? "true" : "false")")
+        }
+        if let folderShared {
+            lines.append("folder_shared:\t\(folderShared ? "true" : "false")")
+        }
+        if !tags.isEmpty {
+            lines.append("tags:\t" + tags.joined(separator: ", "))
+        }
         if attachmentCount > 0 {
             lines.append("attachments:\t\(attachmentCount)")
         }
@@ -976,6 +1096,48 @@ struct Honeycrisp {
         }
 
         return (output, names)
+    }
+
+    static func fillEmptyBullets(in text: String, using fallback: String, tags: [String]) -> String {
+        let fallbackLines = fallback.split(whereSeparator: \.isNewline).map(String.init)
+        var replacements: [String] = []
+        for line in fallbackLines {
+            if let bulletLine = normalizedBulletLine(from: line) {
+                replacements.append(bulletLine)
+            }
+        }
+        if replacements.isEmpty && !tags.isEmpty {
+            replacements = tags.map { tag in
+                let trimmed = tag.trimmingCharacters(in: .whitespacesAndNewlines)
+                return trimmed.isEmpty ? "" : "• \(trimmed)"
+            }.filter { !$0.isEmpty }
+        }
+        guard !replacements.isEmpty else { return text }
+
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        var output: [String] = []
+        output.reserveCapacity(lines.count)
+        for line in lines {
+            if isEmptyBulletLine(line), !replacements.isEmpty {
+                output.append(replacements.removeFirst())
+            } else {
+                output.append(line)
+            }
+        }
+        return output.joined(separator: "\n")
+    }
+
+    static func isEmptyBulletLine(_ line: String) -> Bool {
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed == "•" || trimmed == "◦"
+    }
+
+    static func normalizedBulletLine(from line: String) -> String? {
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let first = trimmed.first, first == "•" || first == "◦" else { return nil }
+        let remainder = trimmed.drop { $0 == "•" || $0 == "◦" || $0 == " " || $0 == "\t" }
+        guard !remainder.isEmpty else { return nil }
+        return "\(first) \(remainder)"
     }
 
     static func imageExtension(fromImgTag tag: String) -> String {
@@ -1284,39 +1446,152 @@ struct Honeycrisp {
         return unique
     }
 
-    static func parseNoteDetail(_ output: String) throws -> NoteDetail {
+    static func extractTags(from text: String) -> [String] {
+        guard let regex = try? NSRegularExpression(pattern: "(?:^|\\s)#([A-Za-z0-9_-]+)", options: [.anchorsMatchLines]) else {
+            return []
+        }
+        let nsText = text as NSString
+        let matches = regex.matches(in: text, range: NSRange(location: 0, length: nsText.length))
+        var seen: Set<String> = []
+        var tags: [String] = []
+        tags.reserveCapacity(matches.count)
+        for match in matches {
+            guard match.numberOfRanges > 1 else { continue }
+            let raw = nsText.substring(with: match.range(at: 1))
+            let key = raw.lowercased()
+            if seen.insert(key).inserted {
+                tags.append(raw)
+            }
+        }
+        return tags
+    }
+
+    static func extractTagsFromHTML(_ html: String) -> [String] {
+        guard let regex = try? NSRegularExpression(
+            pattern: "x-apple-notes:(?:\\/\\/)?tag\\/([^\"'<>\\s]+)",
+            options: [.caseInsensitive]
+        ) else {
+            return []
+        }
+        let nsHTML = html as NSString
+        let matches = regex.matches(in: html, range: NSRange(location: 0, length: nsHTML.length))
+        var seen: Set<String> = []
+        var tags: [String] = []
+        tags.reserveCapacity(matches.count)
+        for match in matches {
+            guard match.numberOfRanges > 1 else { continue }
+            var raw = nsHTML.substring(with: match.range(at: 1))
+            if let stopIndex = raw.firstIndex(where: { $0 == "?" || $0 == "#" || $0 == "&" }) {
+                raw = String(raw[..<stopIndex])
+            }
+            raw = raw.replacingOccurrences(of: "+", with: " ")
+            let decoded = raw.removingPercentEncoding ?? raw
+            let trimmed = decoded.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty { continue }
+            let key = trimmed.lowercased()
+            if seen.insert(key).inserted {
+                tags.append(trimmed)
+            }
+        }
+        return tags
+    }
+
+    static func parseNoteDetail(_ output: String) throws -> NoteParsedDetail {
         let lines = output.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-        guard lines.count >= 3 else {
+        guard !lines.isEmpty else {
             throw CLIError(message: "Invalid note detail output")
         }
 
-        func stripPrefix(_ line: String, _ prefix: String) -> String {
-            guard line.hasPrefix(prefix) else { return line }
-            return String(line.dropFirst(prefix.count))
+        func parseBool(_ value: String) -> Bool? {
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            if trimmed == "true" { return true }
+            if trimmed == "false" { return false }
+            return nil
         }
 
         var index = 0
         if lines[0].hasPrefix("id:\t") {
             index += 1
         }
-        guard index + 2 < lines.count else {
+
+        var title = ""
+        var created = ""
+        var modified = ""
+        var account: String? = nil
+        var folder: String? = nil
+        var folderPath: String? = nil
+        var shared: Bool? = nil
+        var folderShared: Bool? = nil
+        var attachments: [AttachmentDetail] = []
+
+        while index < lines.count {
+            let line = lines[index]
+            if line.isEmpty {
+                index += 1
+                break
+            }
+            if let range = line.range(of: ":\t") {
+                let key = String(line[..<range.lowerBound])
+                let value = String(line[range.upperBound...])
+                switch key {
+                case "name":
+                    title = value
+                case "created":
+                    created = value
+                case "modified":
+                    modified = value
+                case "account":
+                    account = value.isEmpty ? nil : value
+                case "folder":
+                    folder = value.isEmpty ? nil : value
+                case "folder_path":
+                    folderPath = value.isEmpty ? nil : value
+                case "shared":
+                    shared = parseBool(value)
+                case "folder_shared":
+                    folderShared = parseBool(value)
+                case "attachment":
+                    let parts = value.split(separator: "\t", omittingEmptySubsequences: false)
+                    let name = parts.count > 0 ? String(parts[0]) : ""
+                    let created = parts.count > 1 ? String(parts[1]) : nil
+                    let modified = parts.count > 2 ? String(parts[2]) : nil
+                    let url = parts.count > 3 ? String(parts[3]) : nil
+                    let shared = parts.count > 4 ? parseBool(String(parts[4])) : nil
+                    if !name.isEmpty {
+                        attachments.append(
+                            AttachmentDetail(
+                                name: name,
+                                created: created?.isEmpty == true ? nil : created,
+                                modified: modified?.isEmpty == true ? nil : modified,
+                                url: url?.isEmpty == true ? nil : url,
+                                shared: shared
+                            )
+                        )
+                    }
+                default:
+                    break
+                }
+            }
+            index += 1
+        }
+
+        let body = index < lines.count ? lines[index...].joined(separator: "\n") : ""
+
+        if title.isEmpty || created.isEmpty || modified.isEmpty {
             throw CLIError(message: "Invalid note detail output")
         }
-
-        let title = stripPrefix(lines[index], "name:\t")
-        let created = stripPrefix(lines[index + 1], "created:\t")
-        let modified = stripPrefix(lines[index + 2], "modified:\t")
-
-        var bodyStart = index + 3
-        if lines.count > bodyStart, lines[bodyStart].isEmpty {
-            bodyStart += 1
-        }
-        let body = bodyStart < lines.count ? lines[bodyStart...].joined(separator: "\n") : ""
-
-        if title.isEmpty {
-            throw CLIError(message: "Invalid note detail output")
-        }
-        return NoteDetail(title: title, created: created, modified: modified, body: body, format: nil, assets: nil)
+        return NoteParsedDetail(
+            title: title,
+            created: created,
+            modified: modified,
+            account: account,
+            folder: folder,
+            folderPath: folderPath,
+            shared: shared,
+            folderShared: folderShared,
+            attachments: attachments,
+            body: body
+        )
     }
 
     static func parseExportDetail(_ output: String) throws -> NoteExportDetail {
@@ -1623,10 +1898,72 @@ enum AppleScript {
         set noteID to \(idExpr)
         tell application "Notes"
             set theNote to first note whose id is noteID
+            set noteShared to false
+            try
+                set noteShared to shared of theNote
+            end try
+            set folderName to ""
+            set folderPath to ""
+            set folderShared to false
+            set accountName to ""
+            try
+                set folderRef to container of theNote
+                set folderName to name of folderRef
+                try
+                    set folderShared to shared of folderRef
+                end try
+                set pathParts to {folderName}
+                set parentRef to folderRef
+                repeat
+                    set parentRef to container of parentRef
+                    if class of parentRef is account then
+                        set accountName to name of parentRef
+                        exit repeat
+                    else
+                        set beginning of pathParts to (name of parentRef)
+                    end if
+                end repeat
+                set oldTID to AppleScript's text item delimiters
+                set AppleScript's text item delimiters to "/"
+                set folderPath to pathParts as text
+                set AppleScript's text item delimiters to oldTID
+            end try
             set outputLines to {}
             set end of outputLines to ("name:\t" & (name of theNote))
             set end of outputLines to ("created:\t" & ((creation date of theNote) as text))
             set end of outputLines to ("modified:\t" & ((modification date of theNote) as text))
+            if accountName is not "" then
+                set end of outputLines to ("account:\t" & accountName)
+            end if
+            if folderName is not "" then
+                set end of outputLines to ("folder:\t" & folderName)
+            end if
+            if folderPath is not "" then
+                set end of outputLines to ("folder_path:\t" & folderPath)
+            end if
+            set end of outputLines to ("shared:\t" & noteShared)
+            set end of outputLines to ("folder_shared:\t" & folderShared)
+            set end of outputLines to ("attachments:\t" & (count of attachments of theNote))
+            repeat with att in attachments of theNote
+                set attName to name of att
+                set attCreated to ""
+                set attModified to ""
+                set attURL to ""
+                set attShared to false
+                try
+                    set attCreated to ((creation date of att) as text)
+                end try
+                try
+                    set attModified to ((modification date of att) as text)
+                end try
+                try
+                    set attURL to (URL of att) as text
+                end try
+                try
+                    set attShared to shared of att
+                end try
+                set end of outputLines to ("attachment:\t" & attName & tab & attCreated & tab & attModified & tab & attURL & tab & attShared)
+            end repeat
             set end of outputLines to ""
             set end of outputLines to ((body of theNote) as text)
             set AppleScript's text item delimiters to linefeed
@@ -1780,6 +2117,17 @@ enum AppleScript {
             set end of outputLines to ((body of theNote) as text)
             set AppleScript's text item delimiters to linefeed
             return outputLines as text
+        end tell
+        """
+    }
+
+    static func getNotePlaintext(id: String) -> String {
+        let idExpr = asAppleScriptStringExpr(id)
+        return """
+        set noteID to \(idExpr)
+        tell application "Notes"
+            set theNote to first note whose id is noteID
+            return (plaintext of theNote) as text
         end tell
         """
     }
