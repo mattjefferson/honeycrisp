@@ -13,35 +13,54 @@ struct CLIError: Error {
 }
 
 struct NoteSummary: Codable {
-    let id: String
     let title: String
 }
 
 struct NoteDetail: Codable {
-    let id: String
     let title: String
     let created: String
     let modified: String
     let body: String
+    let format: String?
+    let assets: [String]?
 }
 
 struct NoteExportDetail: Codable {
-    let id: String
     let title: String
     let body: String
 }
 
 struct OperationResult: Codable {
-    let id: String
     let ok: Bool
     let action: String
+    let title: String?
 }
 
 struct ExportResult: Codable {
-    let id: String
     let title: String
     let format: String
     let content: String
+    let assets: [String]?
+}
+
+struct NoteMatch {
+    let id: String
+    let title: String
+}
+
+struct MarkdownConversionResult {
+    let markdown: String
+    let assets: [String]
+    let hadAttachments: Bool
+}
+
+struct MarkdownExportContext {
+    let assetsDirPath: String?
+    let assetsDirURL: URL?
+    let titleSlug: String
+    var assets: [String] = []
+    var hadAttachments: Bool = false
+    var imageIndex: Int = 1
 }
 
 @main
@@ -110,14 +129,15 @@ struct Honeycrisp {
         let script = AppleScript.listNotes(limit: limit, folder: folder, account: account)
         let output = try AppleScript.run(script)
         if wantsJSON(parsed) {
-            let notes = parseNoteSummaries(output)
+            let notes = parseNoteSummaries(output).map { NoteSummary(title: $0.title) }
             try outputJSON(notes)
             return
         }
-        if output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return
+        let notes = parseNoteSummaries(output)
+        if notes.isEmpty { return }
+        for note in notes {
+            print(note.title)
         }
-        print(output)
     }
 
     static func cmdSearch(_ parsed: ParsedArgs) throws {
@@ -132,14 +152,15 @@ struct Honeycrisp {
         let script = AppleScript.searchNotes(query: query, limit: limit, folder: folder, account: account)
         let output = try AppleScript.run(script)
         if wantsJSON(parsed) {
-            let notes = parseNoteSummaries(output)
+            let notes = parseNoteSummaries(output).map { NoteSummary(title: $0.title) }
             try outputJSON(notes)
             return
         }
-        if output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return
+        let notes = parseNoteSummaries(output)
+        if notes.isEmpty { return }
+        for note in notes {
+            print(note.title)
         }
-        print(output)
     }
 
     static func cmdShow(_ parsed: ParsedArgs) throws {
@@ -152,12 +173,58 @@ struct Honeycrisp {
         if output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             throw CLIError(message: "Note not found")
         }
+        let detail = try parseNoteDetail(output)
+        let wantsMarkdown = parsed.flags.contains("--markdown")
+        var assets: [String] = []
+        var hadAttachments = false
+        let bodyText: String
+        let attachmentCount = countEmbeddedImages(detail.body)
+
+        if wantsMarkdown {
+            let assetsDirOption = try optionValue(parsed, "--assets-dir")
+            let assetsDirPath = resolveAssetsDirPath(option: assetsDirOption, title: detail.title, html: detail.body)
+            let conversion = htmlToMarkdown(detail.body, assetsDirPath: assetsDirPath, title: detail.title)
+            hadAttachments = conversion.hadAttachments
+            assets = conversion.assets
+            let cleanedBody = stripLeadingTitleHeading(conversion.markdown, title: detail.title)
+            bodyText = markdownFrom(title: detail.title, body: cleanedBody)
+            if !wantsJSON(parsed), hadAttachments, let assetsDirPath {
+                printErr("Exported \(assets.count) attachment(s) to \(assetsDirPath)")
+            }
+        } else {
+            bodyText = htmlToPlainText(
+                detail.body,
+                title: detail.title,
+                includeImagePlaceholders: true,
+                normalizeLists: true
+            )
+        }
+
         if wantsJSON(parsed) {
-            let detail = try parseNoteDetail(output)
-            try outputJSON(detail)
+            let result = NoteDetail(
+                title: detail.title,
+                created: detail.created,
+                modified: detail.modified,
+                body: bodyText,
+                format: wantsMarkdown ? "markdown" : "text",
+                assets: assets.isEmpty ? nil : assets
+            )
+            try outputJSON(result)
             return
         }
-        print(output)
+
+        if wantsMarkdown {
+            print(bodyText)
+        } else {
+            let plain = formatShowText(
+                title: detail.title,
+                created: detail.created,
+                modified: detail.modified,
+                body: bodyText,
+                attachmentCount: attachmentCount
+            )
+            print(plain)
+        }
     }
 
     static func cmdAdd(_ parsed: ParsedArgs) throws {
@@ -185,11 +252,11 @@ struct Honeycrisp {
             throw CLIError(message: "Failed to create note")
         }
         if wantsJSON(parsed) {
-            let result = OperationResult(id: trimmed, ok: true, action: "add")
+            let result = OperationResult(ok: true, action: "add", title: title)
             try outputJSON(result)
             return
         }
-        print(trimmed)
+        print(title)
     }
 
     static func cmdUpdate(_ parsed: ParsedArgs) throws {
@@ -226,11 +293,15 @@ struct Honeycrisp {
             throw CLIError(message: "Failed to update note")
         }
         if wantsJSON(parsed) {
-            let result = OperationResult(id: trimmed, ok: true, action: "update")
+            let result = OperationResult(ok: true, action: "update", title: title)
             try outputJSON(result)
             return
         }
-        print(trimmed)
+        if let title {
+            print(title)
+        } else {
+            print("updated")
+        }
     }
 
     static func cmdDelete(_ parsed: ParsedArgs) throws {
@@ -245,11 +316,11 @@ struct Honeycrisp {
             throw CLIError(message: "Failed to delete note")
         }
         if wantsJSON(parsed) {
-            let result = OperationResult(id: trimmed, ok: true, action: "delete")
+            let result = OperationResult(ok: true, action: "delete", title: nil)
             try outputJSON(result)
             return
         }
-        print(trimmed)
+        print("deleted")
     }
 
     static func cmdExport(_ parsed: ParsedArgs) throws {
@@ -266,16 +337,25 @@ struct Honeycrisp {
         let detail = try parseExportDetail(output)
         let wantsMarkdown = parsed.flags.contains("--markdown")
         let content: String
+        var assets: [String] = []
+        var hadAttachments = false
         if wantsMarkdown {
-            let bodyMarkdown = htmlToMarkdown(detail.body)
-            let cleanedBody = stripLeadingTitleHeading(bodyMarkdown, title: detail.title)
+            let assetsDirOption = try optionValue(parsed, "--assets-dir")
+            let assetsDirPath = resolveAssetsDirPath(option: assetsDirOption, title: detail.title, html: detail.body)
+            let conversion = htmlToMarkdown(detail.body, assetsDirPath: assetsDirPath, title: detail.title)
+            hadAttachments = conversion.hadAttachments
+            assets = conversion.assets
+            let cleanedBody = stripLeadingTitleHeading(conversion.markdown, title: detail.title)
             content = markdownFrom(title: detail.title, body: cleanedBody)
+            if !wantsJSON(parsed), hadAttachments, let assetsDirPath {
+                printErr("Exported \(assets.count) attachment(s) to \(assetsDirPath)")
+            }
         } else {
-            content = htmlToPlainText(detail.body)
+            content = htmlToPlainText(detail.body, title: detail.title, includeImagePlaceholders: false, normalizeLists: true)
         }
 
         if wantsJSON(parsed) {
-            let result = ExportResult(id: detail.id, title: detail.title, format: wantsMarkdown ? "markdown" : "text", content: content)
+            let result = ExportResult(title: detail.title, format: wantsMarkdown ? "markdown" : "text", content: content, assets: assets.isEmpty ? nil : assets)
             try outputJSON(result)
             return
         }
@@ -329,64 +409,83 @@ struct Honeycrisp {
             throw CLIError(message: "No note found with title: \(title)")
         }
         if matches.count > 1 {
-            let ids = matches.prefix(5).map { $0.id }
             var message = "Multiple notes found with title: \(title). Use --id to disambiguate"
             if account == nil && folder == nil {
                 message += " or add --account/--folder"
-            }
-            if !ids.isEmpty {
-                message += ". Matches: " + ids.joined(separator: ", ")
             }
             throw CLIError(message: message)
         }
         return matches[0].id
     }
 
-    static func htmlToPlainText(_ html: String) -> String {
-        let normalized = html
+    static func htmlToPlainText(
+        _ html: String,
+        title: String? = nil,
+        includeImagePlaceholders: Bool = false,
+        normalizeLists: Bool = false
+    ) -> String {
+        var normalized = html
             .replacingOccurrences(of: "\r\n", with: "\n")
             .replacingOccurrences(of: "\r", with: "\n")
+        if includeImagePlaceholders {
+            let replaced = replaceImageTagsWithPlaceholders(normalized, title: title ?? "")
+            normalized = replaced.html
+        }
         guard let data = normalized.data(using: .utf8) else { return normalized }
         let options: [NSAttributedString.DocumentReadingOptionKey: Any] = [
             .documentType: NSAttributedString.DocumentType.html,
             .characterEncoding: String.Encoding.utf8.rawValue
         ]
         if let attributed = try? NSAttributedString(data: data, options: options, documentAttributes: nil) {
-            return attributed.string
+            let plain = attributed.string
+            return normalizeLists ? normalizePlainTextLists(plain) : plain
         }
         return normalized
     }
 
     static func htmlToMarkdown(_ html: String) -> String {
+        return htmlToPlainText(html)
+    }
+
+    static func htmlToMarkdown(_ html: String, assetsDirPath: String?, title: String) -> MarkdownConversionResult {
         let normalized = html
             .replacingOccurrences(of: "\r\n", with: "\n")
             .replacingOccurrences(of: "\r", with: "\n")
         guard let data = normalized.data(using: .utf8) else {
-            return htmlToPlainText(normalized)
+            return MarkdownConversionResult(markdown: htmlToPlainText(normalized), assets: [], hadAttachments: false)
         }
+
+        var context = MarkdownExportContext(
+            assetsDirPath: assetsDirPath,
+            assetsDirURL: assetsDirPath.map { URL(fileURLWithPath: $0, isDirectory: true) },
+            titleSlug: slugify(title)
+        )
+
         do {
             let doc = try XMLDocument(data: data, options: [.documentTidyHTML])
             if let root = doc.rootElement() {
                 let body = root.elements(forName: "body").first
                 let nodes = body?.children ?? root.children ?? []
-                let rendered = renderMarkdown(nodes: nodes, inline: false, listDepth: 0)
-                return normalizeMarkdown(rendered)
+                let rendered = renderMarkdown(nodes: nodes, context: &context, inline: false, listDepth: 0)
+                let markdown = normalizeMarkdown(rendered)
+                return MarkdownConversionResult(markdown: markdown, assets: context.assets, hadAttachments: context.hadAttachments)
             }
         } catch {
-            return htmlToPlainText(normalized)
+            return MarkdownConversionResult(markdown: htmlToPlainText(normalized), assets: [], hadAttachments: false)
         }
-        return htmlToPlainText(normalized)
+
+        return MarkdownConversionResult(markdown: htmlToPlainText(normalized), assets: [], hadAttachments: false)
     }
 
-    static func renderMarkdown(nodes: [XMLNode], inline: Bool, listDepth: Int) -> String {
+    static func renderMarkdown(nodes: [XMLNode], context: inout MarkdownExportContext, inline: Bool, listDepth: Int) -> String {
         var result = ""
         for node in nodes {
-            result += renderMarkdown(node: node, inline: inline, listDepth: listDepth)
+            result += renderMarkdown(node: node, context: &context, inline: inline, listDepth: listDepth)
         }
         return result
     }
 
-    static func renderMarkdown(node: XMLNode, inline: Bool, listDepth: Int) -> String {
+    static func renderMarkdown(node: XMLNode, context: inout MarkdownExportContext, inline: Bool, listDepth: Int) -> String {
         if node.kind == .text {
             return normalizeText(node.stringValue ?? "", inline: inline)
         }
@@ -399,20 +498,20 @@ struct Honeycrisp {
         case "br":
             return "\n"
         case "p":
-            let content = renderMarkdown(nodes: element.children ?? [], inline: true, listDepth: listDepth)
+            let content = renderMarkdown(nodes: element.children ?? [], context: &context, inline: true, listDepth: listDepth)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             if content.isEmpty { return "" }
             return "\n\n" + content + "\n\n"
         case "div", "section", "article", "header", "footer", "nav", "address":
-            let content = renderMarkdown(nodes: element.children ?? [], inline: false, listDepth: listDepth)
+            let content = renderMarkdown(nodes: element.children ?? [], context: &context, inline: false, listDepth: listDepth)
             return "\n\n" + content + "\n\n"
         case "span":
-            return renderMarkdown(nodes: element.children ?? [], inline: inline, listDepth: listDepth)
+            return renderMarkdown(nodes: element.children ?? [], context: &context, inline: inline, listDepth: listDepth)
         case "strong", "b":
-            let content = renderMarkdown(nodes: element.children ?? [], inline: true, listDepth: listDepth)
+            let content = renderMarkdown(nodes: element.children ?? [], context: &context, inline: true, listDepth: listDepth)
             return "**" + content + "**"
         case "em", "i":
-            let content = renderMarkdown(nodes: element.children ?? [], inline: true, listDepth: listDepth)
+            let content = renderMarkdown(nodes: element.children ?? [], context: &context, inline: true, listDepth: listDepth)
             return "*" + content + "*"
         case "code":
             let content = element.stringValue ?? ""
@@ -424,7 +523,7 @@ struct Honeycrisp {
             let content = element.stringValue ?? ""
             return "\n\n" + wrapCodeBlock(content) + "\n\n"
         case "a":
-            let content = renderMarkdown(nodes: element.children ?? [], inline: true, listDepth: listDepth)
+            let content = renderMarkdown(nodes: element.children ?? [], context: &context, inline: true, listDepth: listDepth)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             let href = element.attribute(forName: "href")?.stringValue ?? ""
             if href.isEmpty {
@@ -433,37 +532,32 @@ struct Honeycrisp {
             let label = content.isEmpty ? href : content
             return "[\(label)](\(href))"
         case "img":
-            let alt = element.attribute(forName: "alt")?.stringValue ?? ""
-            let src = element.attribute(forName: "src")?.stringValue ?? ""
-            if src.isEmpty {
-                return alt
-            }
-            return "![\(alt)](\(src))"
+            return renderImage(element, context: &context)
         case "h1", "h2", "h3", "h4", "h5", "h6":
             let level = Int(tag.dropFirst()) ?? 1
-            let content = renderMarkdown(nodes: element.children ?? [], inline: true, listDepth: listDepth)
+            let content = renderMarkdown(nodes: element.children ?? [], context: &context, inline: true, listDepth: listDepth)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             if content.isEmpty { return "" }
             return "\n\n" + String(repeating: "#", count: max(1, min(6, level))) + " " + content + "\n\n"
         case "ul":
-            return renderList(element, ordered: false, listDepth: listDepth)
+            return renderList(element, context: &context, ordered: false, listDepth: listDepth)
         case "ol":
-            return renderList(element, ordered: true, listDepth: listDepth)
+            return renderList(element, context: &context, ordered: true, listDepth: listDepth)
         case "li":
-            return renderMarkdown(nodes: element.children ?? [], inline: false, listDepth: listDepth)
+            return renderMarkdown(nodes: element.children ?? [], context: &context, inline: false, listDepth: listDepth)
         case "blockquote":
-            let content = renderMarkdown(nodes: element.children ?? [], inline: false, listDepth: listDepth)
+            let content = renderMarkdown(nodes: element.children ?? [], context: &context, inline: false, listDepth: listDepth)
             let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
             if trimmed.isEmpty { return "" }
             return "\n\n" + prefixLines(trimmed, with: "> ") + "\n\n"
         case "hr":
             return "\n\n---\n\n"
         default:
-            return renderMarkdown(nodes: element.children ?? [], inline: inline, listDepth: listDepth)
+            return renderMarkdown(nodes: element.children ?? [], context: &context, inline: inline, listDepth: listDepth)
         }
     }
 
-    static func renderList(_ element: XMLElement, ordered: Bool, listDepth: Int) -> String {
+    static func renderList(_ element: XMLElement, context: inout MarkdownExportContext, ordered: Bool, listDepth: Int) -> String {
         let items = (element.children ?? []).compactMap { $0 as? XMLElement }.filter { $0.name?.lowercased() == "li" }
         if items.isEmpty { return "" }
         let indent = String(repeating: "  ", count: listDepth)
@@ -472,7 +566,7 @@ struct Honeycrisp {
         var index = 1
         for li in items {
             let bullet = ordered ? "\(index)." : "-"
-            let content = renderMarkdown(nodes: li.children ?? [], inline: false, listDepth: listDepth + 1)
+            let content = renderMarkdown(nodes: li.children ?? [], context: &context, inline: false, listDepth: listDepth + 1)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             if content.isEmpty {
                 lines.append("\(indent)\(bullet)")
@@ -572,6 +666,197 @@ struct Honeycrisp {
             return "# \(titleText)\n"
         }
         return "# \(titleText)\n\n\(trimmedBody)"
+    }
+
+    static func formatShowText(title: String, created: String, modified: String, body: String, attachmentCount: Int) -> String {
+        var lines: [String] = []
+        lines.append("name:\t\(title)")
+        lines.append("created:\t\(created)")
+        lines.append("modified:\t\(modified)")
+        if attachmentCount > 0 {
+            lines.append("attachments:\t\(attachmentCount)")
+        }
+        lines.append("")
+        lines.append(body)
+        return lines.joined(separator: "\n")
+    }
+
+    static func renderImage(_ element: XMLElement, context: inout MarkdownExportContext) -> String {
+        let alt = element.attribute(forName: "alt")?.stringValue ?? ""
+        let src = element.attribute(forName: "src")?.stringValue ?? ""
+        if src.isEmpty {
+            return alt
+        }
+
+        let normalizedSrc = src.trimmingCharacters(in: .whitespacesAndNewlines)
+        if normalizedSrc.hasPrefix("data:image/") {
+            context.hadAttachments = true
+            if let assetsDirURL = context.assetsDirURL,
+               let saved = writeEmbeddedImage(src: normalizedSrc, context: &context, assetsDirURL: assetsDirURL) {
+                return "![\(alt)](\(saved))"
+            }
+            return "[attachment omitted]"
+        }
+
+        return "![\(alt)](\(normalizedSrc))"
+    }
+
+    static func writeEmbeddedImage(src: String, context: inout MarkdownExportContext, assetsDirURL: URL) -> String? {
+        guard let commaIndex = src.firstIndex(of: ",") else { return nil }
+        let metadata = String(src[..<commaIndex])
+        let dataPart = String(src[src.index(after: commaIndex)...])
+        let parts = metadata.split(separator: ";")
+        guard let mimePart = parts.first, mimePart.hasPrefix("data:image/") else { return nil }
+        let mime = String(mimePart.replacingOccurrences(of: "data:", with: ""))
+
+        let ext: String
+        if mime.contains("png") {
+            ext = "png"
+        } else if mime.contains("jpeg") || mime.contains("jpg") {
+            ext = "jpg"
+        } else if mime.contains("gif") {
+            ext = "gif"
+        } else {
+            ext = "bin"
+        }
+
+        let sanitizedBase = context.titleSlug.isEmpty ? "note" : context.titleSlug
+        let filename = "\(sanitizedBase)-\(context.imageIndex).\(ext)"
+        context.imageIndex += 1
+
+        let outputURL = assetsDirURL.appendingPathComponent(filename)
+        do {
+            try FileManager.default.createDirectory(at: assetsDirURL, withIntermediateDirectories: true)
+            let cleaned = dataPart.replacingOccurrences(of: "\\s", with: "", options: .regularExpression)
+            guard let data = Data(base64Encoded: cleaned) else { return nil }
+            try data.write(to: outputURL, options: .atomic)
+            let relPath = context.assetsDirPath.map { "\($0)/\(filename)" } ?? filename
+            context.assets.append(relPath)
+            return relPath
+        } catch {
+            return nil
+        }
+    }
+
+    static func resolveAssetsDirPath(option: String?, title: String, html: String) -> String? {
+        if let option, !option.isEmpty {
+            return option
+        }
+        guard htmlHasEmbeddedImages(html) else {
+            return nil
+        }
+        let slug = slugify(title)
+        let dirName = slug.isEmpty ? "note-assets" : "\(slug)-assets"
+        return dirName
+    }
+
+    static func htmlHasEmbeddedImages(_ html: String) -> Bool {
+        return html.contains("data:image/")
+    }
+
+    static func slugify(_ value: String) -> String {
+        let lower = value.lowercased()
+        var result = ""
+        var previousDash = false
+        for scalar in lower.unicodeScalars {
+            if ("a"..."z").contains(Character(scalar)) || ("0"..."9").contains(Character(scalar)) {
+                result.append(Character(scalar))
+                previousDash = false
+            } else if scalar == "-" || scalar == "_" || scalar == " " {
+                if !previousDash {
+                    result.append("-")
+                    previousDash = true
+                }
+            }
+        }
+        return result.trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+    }
+
+    static func replaceImageTagsWithPlaceholders(_ html: String, title: String) -> (html: String, names: [String]) {
+        let slug = slugify(title)
+        var index = 1
+        var names: [String] = []
+        var output = ""
+        var searchRange = html.startIndex..<html.endIndex
+
+        while let range = html.range(of: "<img", options: [.caseInsensitive], range: searchRange) {
+            output += String(html[searchRange.lowerBound..<range.lowerBound])
+            guard let tagEnd = html[range.lowerBound..<html.endIndex].firstIndex(of: ">") else {
+                output += String(html[range.lowerBound..<html.endIndex])
+                searchRange = html.endIndex..<html.endIndex
+                break
+            }
+
+            let tag = String(html[range.lowerBound...tagEnd])
+            let ext = imageExtension(fromImgTag: tag)
+            let base = slug.isEmpty ? "note" : slug
+            let name = "\(base)-\(index).\(ext)"
+            index += 1
+            names.append(name)
+            output += "<p>[image: \(name)]</p>"
+            searchRange = html.index(after: tagEnd)..<html.endIndex
+        }
+
+        if searchRange.lowerBound < html.endIndex {
+            output += String(html[searchRange.lowerBound..<html.endIndex])
+        }
+
+        return (output, names)
+    }
+
+    static func imageExtension(fromImgTag tag: String) -> String {
+        let lower = tag.lowercased()
+        if lower.contains("data:image/png") { return "png" }
+        if lower.contains("data:image/jpeg") { return "jpg" }
+        if lower.contains("data:image/jpg") { return "jpg" }
+        if lower.contains("data:image/gif") { return "gif" }
+        return "png"
+    }
+
+    static func countEmbeddedImages(_ html: String) -> Int {
+        var count = 0
+        var searchRange = html.startIndex..<html.endIndex
+        while let range = html.range(of: "<img", options: [.caseInsensitive], range: searchRange) {
+            count += 1
+            searchRange = range.upperBound..<html.endIndex
+        }
+        return count
+    }
+
+    static func normalizePlainTextLists(_ text: String) -> String {
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+        var output: [String] = []
+        output.reserveCapacity(lines.count)
+
+        for raw in lines {
+            let line = String(raw)
+            if let normalized = normalizeBulletLine(line) {
+                output.append(normalized)
+            } else {
+                output.append(line)
+            }
+        }
+
+        return output.joined(separator: "\n")
+    }
+
+    static func normalizeBulletLine(_ line: String) -> String? {
+        let whitespace = CharacterSet.whitespacesAndNewlines
+        let trimmed = line.trimmingCharacters(in: whitespace)
+        guard !trimmed.isEmpty else { return nil }
+
+        let bulletSymbols: [Character] = ["•", "◦", "‣", "∙", "·"]
+        guard let first = trimmed.first, bulletSymbols.contains(first) else { return nil }
+
+        let indentLevel = line.prefix { $0 == "\t" || $0 == " " }.filter { $0 == "\t" }.count
+        let indent = String(repeating: "  ", count: indentLevel)
+
+        let afterBullet = trimmed.dropFirst().trimmingCharacters(in: whitespace)
+        let prefix = "[ ]"
+        if afterBullet.isEmpty {
+            return "\(indent)\(prefix)"
+        }
+        return "\(indent)\(prefix) \(afterBullet)"
     }
 
     static func stripLeadingTitleHeading(_ markdown: String, title: String) -> String {
@@ -689,9 +974,9 @@ struct Honeycrisp {
         print(json)
     }
 
-    static func parseNoteSummaries(_ output: String) -> [NoteSummary] {
+    static func parseNoteSummaries(_ output: String) -> [NoteMatch] {
         let lines = output.split(whereSeparator: \.isNewline)
-        var results: [NoteSummary] = []
+        var results: [NoteMatch] = []
         results.reserveCapacity(lines.count)
         for lineSub in lines {
             let line = String(lineSub)
@@ -700,14 +985,14 @@ struct Honeycrisp {
             }
             let id = String(line[..<tabIndex])
             let title = String(line[line.index(after: tabIndex)...])
-            results.append(NoteSummary(id: id, title: title))
+            results.append(NoteMatch(id: id, title: title))
         }
         return results
     }
 
     static func parseNoteDetail(_ output: String) throws -> NoteDetail {
         let lines = output.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-        guard lines.count >= 4 else {
+        guard lines.count >= 3 else {
             throw CLIError(message: "Invalid note detail output")
         }
 
@@ -716,26 +1001,33 @@ struct Honeycrisp {
             return String(line.dropFirst(prefix.count))
         }
 
-        let id = stripPrefix(lines[0], "id:\t")
-        let title = stripPrefix(lines[1], "name:\t")
-        let created = stripPrefix(lines[2], "created:\t")
-        let modified = stripPrefix(lines[3], "modified:\t")
+        var index = 0
+        if lines[0].hasPrefix("id:\t") {
+            index += 1
+        }
+        guard index + 2 < lines.count else {
+            throw CLIError(message: "Invalid note detail output")
+        }
 
-        var bodyStart = 4
-        if lines.count > 4, lines[4].isEmpty {
-            bodyStart = 5
+        let title = stripPrefix(lines[index], "name:\t")
+        let created = stripPrefix(lines[index + 1], "created:\t")
+        let modified = stripPrefix(lines[index + 2], "modified:\t")
+
+        var bodyStart = index + 3
+        if lines.count > bodyStart, lines[bodyStart].isEmpty {
+            bodyStart += 1
         }
         let body = bodyStart < lines.count ? lines[bodyStart...].joined(separator: "\n") : ""
 
-        if id.isEmpty {
+        if title.isEmpty {
             throw CLIError(message: "Invalid note detail output")
         }
-        return NoteDetail(id: id, title: title, created: created, modified: modified, body: body)
+        return NoteDetail(title: title, created: created, modified: modified, body: body, format: nil, assets: nil)
     }
 
     static func parseExportDetail(_ output: String) throws -> NoteExportDetail {
         let lines = output.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-        guard lines.count >= 2 else {
+        guard lines.count >= 1 else {
             throw CLIError(message: "Invalid export output")
         }
 
@@ -744,19 +1036,25 @@ struct Honeycrisp {
             return String(line.dropFirst(prefix.count))
         }
 
-        let id = stripPrefix(lines[0], "id:\t")
-        let title = stripPrefix(lines[1], "name:\t")
+        var index = 0
+        if lines[0].hasPrefix("id:\t") {
+            index += 1
+        }
+        guard index < lines.count else {
+            throw CLIError(message: "Invalid export output")
+        }
+        let title = stripPrefix(lines[index], "name:\t")
 
-        var bodyStart = 2
-        if lines.count > 2, lines[2].isEmpty {
-            bodyStart = 3
+        var bodyStart = index + 1
+        if lines.count > bodyStart, lines[bodyStart].isEmpty {
+            bodyStart += 1
         }
         let body = bodyStart < lines.count ? lines[bodyStart...].joined(separator: "\n") : ""
 
-        if id.isEmpty {
+        if title.isEmpty {
             throw CLIError(message: "Invalid export output")
         }
-        return NoteExportDetail(id: id, title: title, body: body)
+        return NoteExportDetail(title: title, body: body)
     }
 
     static func parseArgs(_ args: [String]) -> ParsedArgs {
@@ -838,19 +1136,22 @@ Honeycrisp - Apple Notes CLI
 Usage:
   honeycrisp list [--account NAME] [--folder NAME] [--limit N] [--json]
   honeycrisp search QUERY [--account NAME] [--folder NAME] [--limit N] [--json]
-  honeycrisp show NOTE [--title TITLE] [--account NAME] [--folder NAME] [--json]
+  honeycrisp show NOTE [--title TITLE] [--account NAME] [--folder NAME] [--markdown] [--assets-dir PATH] [--json]
   honeycrisp add TITLE [--account NAME] [--folder NAME] [--body TEXT] [--json]
   honeycrisp add TITLE [--account NAME] [--folder NAME] [--json] < body.txt
   honeycrisp update NOTE [--title TEXT] [--body TEXT] [--account NAME] [--folder NAME] [--json]
   honeycrisp update NOTE [--title TEXT] [--account NAME] [--folder NAME] [--json] < body.txt
   honeycrisp delete NOTE [--title TITLE] [--account NAME] [--folder NAME] [--json]
-  honeycrisp export NOTE [--title TITLE] [--account NAME] [--folder NAME] [--markdown] [--json]
+  honeycrisp export NOTE [--title TITLE] [--account NAME] [--folder NAME] [--markdown] [--assets-dir PATH] [--json]
 
 Output:
-  list/search: one note per line: NOTE_ID<TAB>TITLE
-  add/update/delete: prints the NOTE_ID
+  list/search: one title per line
+  add: prints the new note title
+  update: prints the new title if provided, otherwise "updated"
+  delete: prints "deleted"
   --json: structured output
   --markdown: export as markdown
+  --assets-dir: export embedded images to a folder
 
 Notes:
   NOTE can be a note id (x-coredata://...) or an exact title.
@@ -969,7 +1270,6 @@ enum AppleScript {
         tell application "Notes"
             set theNote to first note whose id is noteID
             set outputLines to {}
-            set end of outputLines to ("id:\t" & (id of theNote))
             set end of outputLines to ("name:\t" & (name of theNote))
             set end of outputLines to ("created:\t" & ((creation date of theNote) as text))
             set end of outputLines to ("modified:\t" & ((modification date of theNote) as text))
@@ -1094,7 +1394,6 @@ enum AppleScript {
         tell application "Notes"
             set theNote to first note whose id is noteID
             set outputLines to {}
-            set end of outputLines to ("id:\t" & (id of theNote))
             set end of outputLines to ("name:\t" & (name of theNote))
             set end of outputLines to ""
             set end of outputLines to ((body of theNote) as text)
