@@ -19,10 +19,10 @@ honeycrisp add TITLE [--account NAME] [--folder NAME] [--body TEXT] [--json]
 honeycrisp add TITLE [--account NAME] [--folder NAME] [--json] < body.txt
 honeycrisp update NOTE [--title TEXT] [--body TEXT] [--account NAME] [--folder NAME] [--json]
 honeycrisp update NOTE [--title TEXT] [--account NAME] [--folder NAME] [--json] < body.txt
-honeycrisp delete NOTE [--account NAME] [--folder NAME] [--json]
-honeycrisp export NOTE [--account NAME] [--folder NAME] [--markdown] [--assets-dir PATH] [--json]
 honeycrisp append NOTE TEXT [--account NAME] [--folder NAME] [--body TEXT] [--json]
 honeycrisp append NOTE [--account NAME] [--folder NAME] [--json] < body.txt
+honeycrisp delete NOTE [--account NAME] [--folder NAME] [--json]
+honeycrisp export NOTE [--account NAME] [--folder NAME] [--markdown] [--assets-dir PATH] [--json]
 ```
 
 Output format:

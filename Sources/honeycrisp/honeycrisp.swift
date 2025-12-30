@@ -1437,10 +1437,10 @@ Usage:
   honeycrisp add TITLE [--account NAME] [--folder NAME] [--json] < body.txt
   honeycrisp update NOTE [--title TEXT] [--body TEXT] [--account NAME] [--folder NAME] [--json]
   honeycrisp update NOTE [--title TEXT] [--account NAME] [--folder NAME] [--json] < body.txt
-  honeycrisp delete NOTE [--account NAME] [--folder NAME] [--json]
-  honeycrisp export NOTE [--account NAME] [--folder NAME] [--markdown] [--assets-dir PATH] [--json]
   honeycrisp append NOTE TEXT [--account NAME] [--folder NAME] [--body TEXT] [--json]
   honeycrisp append NOTE [--account NAME] [--folder NAME] [--json] < body.txt
+  honeycrisp delete NOTE [--account NAME] [--folder NAME] [--json]
+  honeycrisp export NOTE [--account NAME] [--folder NAME] [--markdown] [--assets-dir PATH] [--json]
 
 Output:
   list/search: one title per line
@@ -1488,11 +1488,31 @@ enum AppleScript {
         set limitCount to \(limitValue)
         set folderName to \(folderExpr)
         set accountName to \(accountExpr)
-        set excludeDeleted to true
+        set includeDeleted to false
         if folderName is "Recently Deleted" then
-            set excludeDeleted to false
+            set includeDeleted to true
         end if
         tell application "Notes"
+            set deletedIDs to {}
+            if not includeDeleted then
+                if accountName is not "" then
+                    try
+                        set deletedFolder to first folder of account accountName whose name is "Recently Deleted"
+                        repeat with dn in notes of deletedFolder
+                            set end of deletedIDs to (id of dn)
+                        end repeat
+                    end try
+                else
+                    repeat with acc in accounts
+                        try
+                            set deletedFolder to first folder of acc whose name is "Recently Deleted"
+                            repeat with dn in notes of deletedFolder
+                                set end of deletedIDs to (id of dn)
+                            end repeat
+                        end try
+                    end repeat
+                end if
+            end if
             set targetNotes to notes
             if accountName is not "" then
                 set targetNotes to notes of account accountName
@@ -1514,14 +1534,9 @@ enum AppleScript {
             end if
             set outputLines to {}
             repeat with n in targetNotes
-                set containerName to ""
-                try
-                    set containerName to name of container of n
-                end try
-                if excludeDeleted and (containerName is "Recently Deleted") then
-                    -- skip deleted notes
-                else
-                    set end of outputLines to ((id of n) & tab & (name of n))
+                set noteID to id of n
+                if includeDeleted or (noteID is not in deletedIDs) then
+                    set end of outputLines to ((noteID) & tab & (name of n))
                 end if
                 if (limitCount > 0) and ((count of outputLines) is greater than or equal to limitCount) then exit repeat
             end repeat
@@ -1542,11 +1557,31 @@ enum AppleScript {
         set queryText to \(queryExpr)
         set folderName to \(folderExpr)
         set accountName to \(accountExpr)
-        set excludeDeleted to true
+        set includeDeleted to false
         if folderName is "Recently Deleted" then
-            set excludeDeleted to false
+            set includeDeleted to true
         end if
         tell application "Notes"
+            set deletedIDs to {}
+            if not includeDeleted then
+                if accountName is not "" then
+                    try
+                        set deletedFolder to first folder of account accountName whose name is "Recently Deleted"
+                        repeat with dn in notes of deletedFolder
+                            set end of deletedIDs to (id of dn)
+                        end repeat
+                    end try
+                else
+                    repeat with acc in accounts
+                        try
+                            set deletedFolder to first folder of acc whose name is "Recently Deleted"
+                            repeat with dn in notes of deletedFolder
+                                set end of deletedIDs to (id of dn)
+                            end repeat
+                        end try
+                    end repeat
+                end if
+            end if
             set targetNotes to notes
             if accountName is not "" then
                 set targetNotes to notes of account accountName
@@ -1569,14 +1604,9 @@ enum AppleScript {
             set outputLines to {}
             repeat with n in targetNotes
                 if ((name of n) contains queryText) or ((body of n) contains queryText) then
-                    set containerName to ""
-                    try
-                        set containerName to name of container of n
-                    end try
-                    if excludeDeleted and (containerName is "Recently Deleted") then
-                        -- skip deleted notes
-                    else
-                        set end of outputLines to ((id of n) & tab & (name of n))
+                    set noteID to id of n
+                    if includeDeleted or (noteID is not in deletedIDs) then
+                        set end of outputLines to ((noteID) & tab & (name of n))
                     end if
                     if (limitCount > 0) and ((count of outputLines) is greater than or equal to limitCount) then exit repeat
                 end if
@@ -1679,11 +1709,31 @@ enum AppleScript {
         set titleText to \(titleExpr)
         set folderName to \(folderExpr)
         set accountName to \(accountExpr)
-        set excludeDeleted to true
+        set includeDeleted to false
         if folderName is "Recently Deleted" then
-            set excludeDeleted to false
+            set includeDeleted to true
         end if
         tell application "Notes"
+            set deletedIDs to {}
+            if not includeDeleted then
+                if accountName is not "" then
+                    try
+                        set deletedFolder to first folder of account accountName whose name is "Recently Deleted"
+                        repeat with dn in notes of deletedFolder
+                            set end of deletedIDs to (id of dn)
+                        end repeat
+                    end try
+                else
+                    repeat with acc in accounts
+                        try
+                            set deletedFolder to first folder of acc whose name is "Recently Deleted"
+                            repeat with dn in notes of deletedFolder
+                                set end of deletedIDs to (id of dn)
+                            end repeat
+                        end try
+                    end repeat
+                end if
+            end if
             set targetNotes to notes
             if accountName is not "" then
                 set targetNotes to notes of account accountName
@@ -1706,14 +1756,9 @@ enum AppleScript {
             set outputLines to {}
             repeat with n in targetNotes
                 if (name of n) is titleText then
-                    set containerName to ""
-                    try
-                        set containerName to name of container of n
-                    end try
-                    if excludeDeleted and (containerName is "Recently Deleted") then
-                        -- skip deleted notes
-                    else
-                        set end of outputLines to ((id of n) & tab & (name of n))
+                    set noteID to id of n
+                    if includeDeleted or (noteID is not in deletedIDs) then
+                        set end of outputLines to ((noteID) & tab & (name of n))
                     end if
                 end if
             end repeat
