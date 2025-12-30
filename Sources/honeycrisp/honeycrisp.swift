@@ -16,6 +16,26 @@ struct NoteSummary: Codable {
     let title: String
 }
 
+struct AccountSummary: Codable {
+    let name: String
+}
+
+struct FolderSummary: Codable {
+    let account: String
+    let name: String
+}
+
+struct AccountEntry {
+    let id: String
+    let name: String
+}
+
+struct FolderEntry {
+    let id: String
+    let account: String
+    let name: String
+}
+
 struct NoteDetail: Codable {
     let title: String
     let created: String
@@ -116,6 +136,8 @@ struct Honeycrisp {
             try cmdDelete(parsed)
         case "export":
             try cmdExport(parsed)
+        case "append":
+            try cmdAppend(parsed)
         default:
             throw CLIError(message: "Unknown command: \(command)")
         }
@@ -125,6 +147,49 @@ struct Honeycrisp {
         let limit = try parseIntOption(parsed, "--limit")
         let folder = try optionValue(parsed, "--folder")
         let account = try optionValue(parsed, "--account")
+        let wantsAccounts = parsed.flags.contains("--accounts")
+        let wantsFolders = parsed.flags.contains("--folders")
+        if wantsAccounts && wantsFolders {
+            throw CLIError(message: "list cannot use --accounts and --folders together")
+        }
+
+        if wantsAccounts {
+            let output = try AppleScript.run(AppleScript.listAccounts())
+            var accounts = uniqueAccountsByID(parseAccountEntries(output))
+            if let limit, accounts.count > limit {
+                accounts = Array(accounts.prefix(limit))
+            }
+            if wantsJSON(parsed) {
+                let summaries = accounts.map { AccountSummary(name: $0.name) }
+                try outputJSON(summaries)
+                return
+            }
+            for entry in accounts {
+                print(entry.name)
+            }
+            return
+        }
+
+        if wantsFolders {
+            let output = try AppleScript.run(AppleScript.listFolders(account: account))
+            var folders = uniqueFoldersByID(parseFolderEntries(output))
+            if let limit, folders.count > limit {
+                folders = Array(folders.prefix(limit))
+            }
+            if wantsJSON(parsed) {
+                let summaries = folders.map { FolderSummary(account: $0.account, name: $0.name) }
+                try outputJSON(summaries)
+                return
+            }
+            for folderInfo in folders {
+                if let account, !account.isEmpty {
+                    print(folderInfo.name)
+                } else {
+                    print("\(folderInfo.account)\t\(folderInfo.name)")
+                }
+            }
+            return
+        }
 
         let script = AppleScript.listNotes(limit: limit, folder: folder, account: account)
         let output = try AppleScript.run(script)
@@ -166,7 +231,10 @@ struct Honeycrisp {
     static func cmdShow(_ parsed: ParsedArgs) throws {
         let account = try optionValue(parsed, "--account")
         let folder = try optionValue(parsed, "--folder")
-        let noteID = try resolveNoteID(parsed, commandName: "show", selectorTitleOption: "--title", account: account, folder: folder)
+        if let _ = try optionValue(parsed, "--title") {
+            throw CLIError(message: "show does not accept --title; pass the title as NOTE")
+        }
+        let noteID = try resolveNoteID(parsed, commandName: "show", selectorTitleOption: nil, account: account, folder: folder)
 
         let script = AppleScript.showNote(id: noteID)
         let output = try AppleScript.run(script)
@@ -308,7 +376,10 @@ struct Honeycrisp {
     static func cmdDelete(_ parsed: ParsedArgs) throws {
         let account = try optionValue(parsed, "--account")
         let folder = try optionValue(parsed, "--folder")
-        let noteID = try resolveNoteID(parsed, commandName: "delete", selectorTitleOption: "--title", account: account, folder: folder)
+        if let _ = try optionValue(parsed, "--title") {
+            throw CLIError(message: "delete does not accept --title; pass the title as NOTE")
+        }
+        let noteID = try resolveNoteID(parsed, commandName: "delete", selectorTitleOption: nil, account: account, folder: folder)
 
         let script = AppleScript.deleteNote(id: noteID)
         let output = try AppleScript.run(script)
@@ -324,10 +395,52 @@ struct Honeycrisp {
         print("deleted")
     }
 
+    static func cmdAppend(_ parsed: ParsedArgs) throws {
+        let account = try optionValue(parsed, "--account")
+        let folder = try optionValue(parsed, "--folder")
+        if let _ = try optionValue(parsed, "--title") {
+            throw CLIError(message: "append does not accept --title; pass the title as NOTE")
+        }
+        let noteID = try resolveNoteID(parsed, commandName: "append", selectorTitleOption: nil, account: account, folder: folder)
+
+        let text: String
+        if let bodyArg = try optionValue(parsed, "--body") {
+            text = bodyArg
+        } else if parsed.positionals.count > 1 {
+            text = parsed.positionals.dropFirst().joined(separator: " ")
+        } else if !isStdinTTY() {
+            text = readStdin()
+        } else {
+            throw CLIError(message: "append requires text (use --body, trailing args, or stdin)")
+        }
+
+        let currentBody = try AppleScript.run(AppleScript.getNoteBody(id: noteID))
+        let newBody: String
+        if htmlLooksLikeChecklist(currentBody), let updated = appendChecklistItemHTML(currentBody, item: text) {
+            newBody = updated
+        } else {
+            newBody = currentBody + htmlFragmentFromPlainText(text)
+        }
+        let output = try AppleScript.run(AppleScript.setNoteBody(id: noteID, html: newBody))
+        let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            throw CLIError(message: "Failed to append to note")
+        }
+        if wantsJSON(parsed) {
+            let result = OperationResult(ok: true, action: "append", title: trimmed)
+            try outputJSON(result)
+            return
+        }
+        print(trimmed)
+    }
+
     static func cmdExport(_ parsed: ParsedArgs) throws {
         let account = try optionValue(parsed, "--account")
         let folder = try optionValue(parsed, "--folder")
-        let noteID = try resolveNoteID(parsed, commandName: "export", selectorTitleOption: "--title", account: account, folder: folder)
+        if let _ = try optionValue(parsed, "--title") {
+            throw CLIError(message: "export does not accept --title; pass the title as NOTE")
+        }
+        let noteID = try resolveNoteID(parsed, commandName: "export", selectorTitleOption: nil, account: account, folder: folder)
 
         let script = AppleScript.exportNote(id: noteID)
         let output = try AppleScript.run(script)
@@ -675,6 +788,60 @@ struct Honeycrisp {
         return "# \(titleText)\n\n\(trimmedBody)"
     }
 
+    static func htmlFragmentFromPlainText(_ text: String) -> String {
+        let escaped = escapeHTML(text)
+        let withBreaks = escaped.replacingOccurrences(of: "\n", with: "<br>")
+        return "<div>\(withBreaks)</div>"
+    }
+
+    static func escapeHTML(_ text: String) -> String {
+        var result = text
+        result = result.replacingOccurrences(of: "&", with: "&amp;")
+        result = result.replacingOccurrences(of: "<", with: "&lt;")
+        result = result.replacingOccurrences(of: ">", with: "&gt;")
+        result = result.replacingOccurrences(of: "\"", with: "&quot;")
+        result = result.replacingOccurrences(of: "'", with: "&#39;")
+        return result
+    }
+
+    static func appendChecklistItemHTML(_ html: String, item: String) -> String? {
+        let normalized = html
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+        guard let data = normalized.data(using: .utf8) else { return nil }
+        do {
+            let doc = try XMLDocument(data: data, options: [.documentTidyHTML])
+            guard let root = doc.rootElement() else { return nil }
+            let body = root.elements(forName: "body").first ?? root
+            guard let ul = findLastElement(named: "ul", in: body) else { return nil }
+            let li = XMLElement(name: "li", stringValue: item)
+            ul.addChild(li)
+            return innerHTML(of: body)
+        } catch {
+            return nil
+        }
+    }
+
+    static func findLastElement(named name: String, in element: XMLElement) -> XMLElement? {
+        var last: XMLElement?
+        if element.name?.lowercased() == name {
+            last = element
+        }
+        for child in element.children ?? [] {
+            if let childElement = child as? XMLElement {
+                if let found = findLastElement(named: name, in: childElement) {
+                    last = found
+                }
+            }
+        }
+        return last
+    }
+
+    static func innerHTML(of element: XMLElement) -> String {
+        guard let children = element.children else { return "" }
+        return children.map { $0.xmlString }.joined()
+    }
+
     static func formatShowText(title: String, created: String, modified: String, body: String, attachmentCount: Int) -> String {
         var lines: [String] = []
         lines.append("name:\t\(title)")
@@ -856,45 +1023,49 @@ struct Honeycrisp {
             let doc = try XMLDocument(data: data, options: [.documentTidyHTML])
             let root = doc.rootElement()
             let nodes = root?.elements(forName: "body").first?.children ?? root?.children ?? []
-            var foundList = false
-            if !checkChecklistNodes(nodes, foundList: &foundList) {
-                return false
-            }
-            return foundList
+            var listCount = 0
+            var otherCount = 0
+            countChecklistText(nodes, inList: false, ignoreText: false, listCount: &listCount, otherCount: &otherCount)
+            if listCount == 0 { return false }
+            if otherCount == 0 { return true }
+            return listCount >= otherCount * 2
         } catch {
             return false
         }
     }
 
-    static func checkChecklistNodes(_ nodes: [XMLNode], foundList: inout Bool) -> Bool {
+    static func countChecklistText(
+        _ nodes: [XMLNode],
+        inList: Bool,
+        ignoreText: Bool,
+        listCount: inout Int,
+        otherCount: inout Int
+    ) {
         for node in nodes {
             if node.kind == .text {
-                if let value = node.stringValue, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    return false
+                let trimmed = node.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                if trimmed.isEmpty { continue }
+                if ignoreText { continue }
+                if inList {
+                    listCount += 1
+                } else {
+                    otherCount += 1
                 }
                 continue
             }
             guard let element = node as? XMLElement else { continue }
             let tag = element.name?.lowercased() ?? ""
-            if tag == "ul" || tag == "ol" || tag == "li" {
-                foundList = true
-                continue
-            }
-            if tag == "br" {
-                continue
-            }
-            if tag == "h1" || tag == "h2" || tag == "h3" || tag == "h4" || tag == "h5" || tag == "h6" {
-                continue
-            }
-            if tag == "div" || tag == "p" || tag == "section" || tag == "article" || tag == "header" || tag == "footer" || tag == "nav" {
-                if !checkChecklistNodes(element.children ?? [], foundList: &foundList) {
-                    return false
-                }
-                continue
-            }
-            return false
+            let isListTag = tag == "ul" || tag == "ol" || tag == "li"
+            let nextInList = inList || isListTag
+            let nextIgnoreText = ignoreText || tag.hasPrefix("h")
+            countChecklistText(
+                element.children ?? [],
+                inList: nextInList,
+                ignoreText: nextIgnoreText,
+                listCount: &listCount,
+                otherCount: &otherCount
+            )
         }
-        return true
     }
 
     static func normalizeBulletLine(_ line: String) -> String? {
@@ -1045,6 +1216,60 @@ struct Honeycrisp {
             results.append(NoteMatch(id: id, title: title))
         }
         return results
+    }
+
+    static func parseAccountEntries(_ output: String) -> [AccountEntry] {
+        let lines = output.split(whereSeparator: \.isNewline)
+        var results: [AccountEntry] = []
+        results.reserveCapacity(lines.count)
+        for lineSub in lines {
+            let line = String(lineSub)
+            guard let tabIndex = line.firstIndex(of: "\t") else { continue }
+            let id = String(line[..<tabIndex])
+            let name = String(line[line.index(after: tabIndex)...])
+            results.append(AccountEntry(id: id, name: name))
+        }
+        return results
+    }
+
+    static func parseFolderEntries(_ output: String) -> [FolderEntry] {
+        let lines = output.split(whereSeparator: \.isNewline)
+        var results: [FolderEntry] = []
+        results.reserveCapacity(lines.count)
+        for lineSub in lines {
+            let line = String(lineSub)
+            let parts = line.split(separator: "\t", omittingEmptySubsequences: false)
+            guard parts.count >= 3 else { continue }
+            let id = String(parts[0])
+            let account = String(parts[1])
+            let name = String(parts[2])
+            results.append(FolderEntry(id: id, account: account, name: name))
+        }
+        return results
+    }
+
+    static func uniqueAccountsByID(_ accounts: [AccountEntry]) -> [AccountEntry] {
+        var seen: Set<String> = []
+        var unique: [AccountEntry] = []
+        unique.reserveCapacity(accounts.count)
+        for account in accounts {
+            if seen.insert(account.id).inserted {
+                unique.append(account)
+            }
+        }
+        return unique
+    }
+
+    static func uniqueFoldersByID(_ folders: [FolderEntry]) -> [FolderEntry] {
+        var seen: Set<String> = []
+        var unique: [FolderEntry] = []
+        unique.reserveCapacity(folders.count)
+        for folder in folders {
+            if seen.insert(folder.id).inserted {
+                unique.append(folder)
+            }
+        }
+        return unique
     }
 
     static func uniqueNotesByID(_ notes: [NoteMatch]) -> [NoteMatch] {
@@ -1204,20 +1429,25 @@ Honeycrisp - Apple Notes CLI
 
 Usage:
   honeycrisp list [--account NAME] [--folder NAME] [--limit N] [--json]
+  honeycrisp list --accounts [--limit N] [--json]
+  honeycrisp list --folders [--account NAME] [--limit N] [--json]
   honeycrisp search QUERY [--account NAME] [--folder NAME] [--limit N] [--json]
-  honeycrisp show NOTE [--title TITLE] [--account NAME] [--folder NAME] [--markdown] [--assets-dir PATH] [--json]
+  honeycrisp show NOTE [--account NAME] [--folder NAME] [--markdown] [--assets-dir PATH] [--json]
   honeycrisp add TITLE [--account NAME] [--folder NAME] [--body TEXT] [--json]
   honeycrisp add TITLE [--account NAME] [--folder NAME] [--json] < body.txt
   honeycrisp update NOTE [--title TEXT] [--body TEXT] [--account NAME] [--folder NAME] [--json]
   honeycrisp update NOTE [--title TEXT] [--account NAME] [--folder NAME] [--json] < body.txt
-  honeycrisp delete NOTE [--title TITLE] [--account NAME] [--folder NAME] [--json]
-  honeycrisp export NOTE [--title TITLE] [--account NAME] [--folder NAME] [--markdown] [--assets-dir PATH] [--json]
+  honeycrisp delete NOTE [--account NAME] [--folder NAME] [--json]
+  honeycrisp export NOTE [--account NAME] [--folder NAME] [--markdown] [--assets-dir PATH] [--json]
+  honeycrisp append NOTE TEXT [--account NAME] [--folder NAME] [--body TEXT] [--json]
+  honeycrisp append NOTE [--account NAME] [--folder NAME] [--json] < body.txt
 
 Output:
   list/search: one title per line
   add: prints the new note title
   update: prints the new title if provided, otherwise "updated"
   delete: prints "deleted"
+  append: prints the note title
   --json: structured output
   --markdown: export as markdown
   --assets-dir: export embedded images to a folder
@@ -1226,6 +1456,7 @@ Notes:
   NOTE can be a note id (x-coredata://...) or an exact title.
   If multiple notes share a title, use --id or add --account/--folder to narrow.
   For update, NOTE selects the note and --title sets the new title.
+  Notes in "Recently Deleted" are excluded unless you pass --folder "Recently Deleted".
 """
         print(help)
     }
@@ -1257,6 +1488,10 @@ enum AppleScript {
         set limitCount to \(limitValue)
         set folderName to \(folderExpr)
         set accountName to \(accountExpr)
+        set excludeDeleted to true
+        if folderName is "Recently Deleted" then
+            set excludeDeleted to false
+        end if
         tell application "Notes"
             set targetNotes to notes
             if accountName is not "" then
@@ -1279,7 +1514,15 @@ enum AppleScript {
             end if
             set outputLines to {}
             repeat with n in targetNotes
-                set end of outputLines to ((id of n) & tab & (name of n))
+                set containerName to ""
+                try
+                    set containerName to name of container of n
+                end try
+                if excludeDeleted and (containerName is "Recently Deleted") then
+                    -- skip deleted notes
+                else
+                    set end of outputLines to ((id of n) & tab & (name of n))
+                end if
                 if (limitCount > 0) and ((count of outputLines) is greater than or equal to limitCount) then exit repeat
             end repeat
             set AppleScript's text item delimiters to linefeed
@@ -1299,6 +1542,10 @@ enum AppleScript {
         set queryText to \(queryExpr)
         set folderName to \(folderExpr)
         set accountName to \(accountExpr)
+        set excludeDeleted to true
+        if folderName is "Recently Deleted" then
+            set excludeDeleted to false
+        end if
         tell application "Notes"
             set targetNotes to notes
             if accountName is not "" then
@@ -1322,7 +1569,15 @@ enum AppleScript {
             set outputLines to {}
             repeat with n in targetNotes
                 if ((name of n) contains queryText) or ((body of n) contains queryText) then
-                    set end of outputLines to ((id of n) & tab & (name of n))
+                    set containerName to ""
+                    try
+                        set containerName to name of container of n
+                    end try
+                    if excludeDeleted and (containerName is "Recently Deleted") then
+                        -- skip deleted notes
+                    else
+                        set end of outputLines to ((id of n) & tab & (name of n))
+                    end if
                     if (limitCount > 0) and ((count of outputLines) is greater than or equal to limitCount) then exit repeat
                 end if
             end repeat
@@ -1424,6 +1679,10 @@ enum AppleScript {
         set titleText to \(titleExpr)
         set folderName to \(folderExpr)
         set accountName to \(accountExpr)
+        set excludeDeleted to true
+        if folderName is "Recently Deleted" then
+            set excludeDeleted to false
+        end if
         tell application "Notes"
             set targetNotes to notes
             if accountName is not "" then
@@ -1447,7 +1706,15 @@ enum AppleScript {
             set outputLines to {}
             repeat with n in targetNotes
                 if (name of n) is titleText then
-                    set end of outputLines to ((id of n) & tab & (name of n))
+                    set containerName to ""
+                    try
+                        set containerName to name of container of n
+                    end try
+                    if excludeDeleted and (containerName is "Recently Deleted") then
+                        -- skip deleted notes
+                    else
+                        set end of outputLines to ((id of n) & tab & (name of n))
+                    end if
                 end if
             end repeat
             set AppleScript's text item delimiters to linefeed
@@ -1466,6 +1733,67 @@ enum AppleScript {
             set end of outputLines to ("name:\t" & (name of theNote))
             set end of outputLines to ""
             set end of outputLines to ((body of theNote) as text)
+            set AppleScript's text item delimiters to linefeed
+            return outputLines as text
+        end tell
+        """
+    }
+
+    static func getNoteBody(id: String) -> String {
+        let idExpr = asAppleScriptStringExpr(id)
+        return """
+        set noteID to \(idExpr)
+        tell application "Notes"
+            set theNote to first note whose id is noteID
+            return (body of theNote) as text
+        end tell
+        """
+    }
+
+    static func setNoteBody(id: String, html: String) -> String {
+        let idExpr = asAppleScriptStringExpr(id)
+        let htmlExpr = asAppleScriptStringExpr(html)
+        return """
+        set noteID to \(idExpr)
+        set htmlFragment to \(htmlExpr)
+        tell application "Notes"
+            set theNote to first note whose id is noteID
+            set body of theNote to htmlFragment
+            return name of theNote
+        end tell
+        """
+    }
+
+    static func listAccounts() -> String {
+        return """
+        tell application "Notes"
+            set outputLines to {}
+            repeat with acc in accounts
+                set end of outputLines to ((id of acc) & tab & (name of acc))
+            end repeat
+            set AppleScript's text item delimiters to linefeed
+            return outputLines as text
+        end tell
+        """
+    }
+
+    static func listFolders(account: String?) -> String {
+        let accountExpr = asAppleScriptStringExpr(account ?? "")
+        return """
+        set accountName to \(accountExpr)
+        tell application "Notes"
+            set outputLines to {}
+            if accountName is not "" then
+                repeat with f in folders of account accountName
+                    set end of outputLines to ((id of f) & tab & accountName & tab & (name of f))
+                end repeat
+            else
+                repeat with acc in accounts
+                    repeat with f in folders of acc
+                        set end of outputLines to ((id of f) & tab & (name of acc) & tab & (name of f))
+                    end repeat
+                end repeat
+            end if
             set AppleScript's text item delimiters to linefeed
             return outputLines as text
         end tell
