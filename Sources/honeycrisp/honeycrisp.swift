@@ -128,12 +128,12 @@ struct Honeycrisp {
 
         let script = AppleScript.listNotes(limit: limit, folder: folder, account: account)
         let output = try AppleScript.run(script)
+        let notes = uniqueNotesByID(parseNoteSummaries(output))
         if wantsJSON(parsed) {
-            let notes = parseNoteSummaries(output).map { NoteSummary(title: $0.title) }
-            try outputJSON(notes)
+            let summaries = notes.map { NoteSummary(title: $0.title) }
+            try outputJSON(summaries)
             return
         }
-        let notes = parseNoteSummaries(output)
         if notes.isEmpty { return }
         for note in notes {
             print(note.title)
@@ -151,12 +151,12 @@ struct Honeycrisp {
 
         let script = AppleScript.searchNotes(query: query, limit: limit, folder: folder, account: account)
         let output = try AppleScript.run(script)
+        let notes = uniqueNotesByID(parseNoteSummaries(output))
         if wantsJSON(parsed) {
-            let notes = parseNoteSummaries(output).map { NoteSummary(title: $0.title) }
-            try outputJSON(notes)
+            let summaries = notes.map { NoteSummary(title: $0.title) }
+            try outputJSON(summaries)
             return
         }
-        let notes = parseNoteSummaries(output)
         if notes.isEmpty { return }
         for note in notes {
             print(note.title)
@@ -192,11 +192,12 @@ struct Honeycrisp {
                 printErr("Exported \(assets.count) attachment(s) to \(assetsDirPath)")
             }
         } else {
+            let treatAsChecklist = htmlLooksLikeChecklist(detail.body)
             bodyText = htmlToPlainText(
                 detail.body,
                 title: detail.title,
                 includeImagePlaceholders: true,
-                normalizeLists: true
+                normalizeLists: treatAsChecklist
             )
         }
 
@@ -351,7 +352,13 @@ struct Honeycrisp {
                 printErr("Exported \(assets.count) attachment(s) to \(assetsDirPath)")
             }
         } else {
-            content = htmlToPlainText(detail.body, title: detail.title, includeImagePlaceholders: false, normalizeLists: true)
+            let treatAsChecklist = htmlLooksLikeChecklist(detail.body)
+            content = htmlToPlainText(
+                detail.body,
+                title: detail.title,
+                includeImagePlaceholders: false,
+                normalizeLists: treatAsChecklist
+            )
         }
 
         if wantsJSON(parsed) {
@@ -840,6 +847,56 @@ struct Honeycrisp {
         return output.joined(separator: "\n")
     }
 
+    static func htmlLooksLikeChecklist(_ html: String) -> Bool {
+        let normalized = html
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+        guard let data = normalized.data(using: .utf8) else { return false }
+        do {
+            let doc = try XMLDocument(data: data, options: [.documentTidyHTML])
+            let root = doc.rootElement()
+            let nodes = root?.elements(forName: "body").first?.children ?? root?.children ?? []
+            var foundList = false
+            if !checkChecklistNodes(nodes, foundList: &foundList) {
+                return false
+            }
+            return foundList
+        } catch {
+            return false
+        }
+    }
+
+    static func checkChecklistNodes(_ nodes: [XMLNode], foundList: inout Bool) -> Bool {
+        for node in nodes {
+            if node.kind == .text {
+                if let value = node.stringValue, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    return false
+                }
+                continue
+            }
+            guard let element = node as? XMLElement else { continue }
+            let tag = element.name?.lowercased() ?? ""
+            if tag == "ul" || tag == "ol" || tag == "li" {
+                foundList = true
+                continue
+            }
+            if tag == "br" {
+                continue
+            }
+            if tag == "h1" || tag == "h2" || tag == "h3" || tag == "h4" || tag == "h5" || tag == "h6" {
+                continue
+            }
+            if tag == "div" || tag == "p" || tag == "section" || tag == "article" || tag == "header" || tag == "footer" || tag == "nav" {
+                if !checkChecklistNodes(element.children ?? [], foundList: &foundList) {
+                    return false
+                }
+                continue
+            }
+            return false
+        }
+        return true
+    }
+
     static func normalizeBulletLine(_ line: String) -> String? {
         let whitespace = CharacterSet.whitespacesAndNewlines
         let trimmed = line.trimmingCharacters(in: whitespace)
@@ -988,6 +1045,18 @@ struct Honeycrisp {
             results.append(NoteMatch(id: id, title: title))
         }
         return results
+    }
+
+    static func uniqueNotesByID(_ notes: [NoteMatch]) -> [NoteMatch] {
+        var seen: Set<String> = []
+        var unique: [NoteMatch] = []
+        unique.reserveCapacity(notes.count)
+        for note in notes {
+            if seen.insert(note.id).inserted {
+                unique.append(note)
+            }
+        }
+        return unique
     }
 
     static func parseNoteDetail(_ output: String) throws -> NoteDetail {
