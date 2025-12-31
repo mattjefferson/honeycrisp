@@ -22,7 +22,7 @@ jobs:
       - name: Read version
         id: version
         run: |
-          version=$(sed -n 's/.*static let version = \"\\([^\"]*\\)\".*/\\1/p' Sources/honeycrisp/CLI/Version.swift)
+          version=$(awk -F'"' '/static let version/ {print $2; exit}' Sources/honeycrisp/CLI/Version.swift)
           if [ -z "$version" ]; then
             echo "Failed to read version from Sources/honeycrisp/CLI/Version.swift" >&2
             exit 1
