@@ -24,6 +24,11 @@ extension Honeycrisp {
                 i += 1
                 continue
             }
+            if arg == "-v" {
+                parsed.flags.insert("--version")
+                i += 1
+                continue
+            }
             if arg == "-j" {
                 parsed.flags.insert("--json")
                 i += 1

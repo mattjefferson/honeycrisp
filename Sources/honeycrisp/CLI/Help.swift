@@ -6,6 +6,7 @@ extension Honeycrisp {
 Honeycrisp - Apple Notes CLI
 
 Usage:
+  honeycrisp version
   honeycrisp list [--account NAME] [--folder NAME] [--limit N] [--json] [--notes-path PATH]
   honeycrisp list --accounts [--limit N] [--json] [--notes-path PATH]
   honeycrisp list --folders [--account NAME] [--limit N] [--json] [--notes-path PATH]
@@ -28,6 +29,7 @@ Output:
   append: prints the note title
   --json: structured output
   --markdown: export as markdown
+  -v, --version: print version
 
 Notes:
   NOTE can be a CoreData id (x-coredata://...) or an exact title.

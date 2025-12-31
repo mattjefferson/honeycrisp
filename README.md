@@ -8,6 +8,13 @@ swift build -c release
 
 Binary will be at `./.build/release/honeycrisp`.
 
+## Version
+```
+honeycrisp version
+honeycrisp --version
+honeycrisp -v
+```
+
 ## Usage
 ```
 honeycrisp list [--account NAME] [--folder NAME] [--limit N] [--json] [--notes-path PATH]

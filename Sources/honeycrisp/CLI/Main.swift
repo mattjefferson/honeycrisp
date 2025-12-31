@@ -31,10 +31,18 @@ struct Honeycrisp {
             printHelp()
             exit(0)
         }
+        if command == "version" || command == "-v" || command == "--version" {
+            printVersion()
+            exit(0)
+        }
 
         let parsed = parseArgs(args)
         if parsed.flags.contains("--help") {
             printHelp()
+            exit(0)
+        }
+        if parsed.flags.contains("--version") {
+            printVersion()
             exit(0)
         }
 
@@ -111,7 +119,7 @@ struct Honeycrisp {
         }
 
         let includeTrashed = folder == "Recently Deleted"
-        var notes = try store.listNotes(limit: limit, accountName: account, folderName: folder, includeTrashed: includeTrashed)
+        let notes = try store.listNotes(limit: limit, accountName: account, folderName: folder, includeTrashed: includeTrashed)
         if wantsJSON(parsed) {
             let summaries = notes.map { NoteSummary(title: $0.title) }
             try outputJSON(summaries)
