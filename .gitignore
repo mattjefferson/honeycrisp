@@ -1,6 +1,10 @@
+bin/
+.home/
+
 # Swift Package Manager
 .build/
 *-assets/
+.swift-module-cache/
 
 # macOS
 .DS_Store
