@@ -61,6 +61,18 @@ final class HoneycrispTests: XCTestCase {
         XCTAssertEqual(rendered, "Snowbird List\n[ ] CPAP\n[ ] Firestick")
     }
 
+    func testPlainTextFromHTMLRendersTable() {
+        let html = """
+        <div><h1>Table</h1></div>
+        <div><object><table><tbody>
+        <tr><td><div>Column1</div></td><td><div>Column2</div></td></tr>
+        <tr><td><div>Row1-1</div></td><td><div>Row1-2</div></td></tr>
+        </tbody></table></object></div>
+        """
+        let rendered = Honeycrisp.plainTextFromHTML(html)
+        XCTAssertEqual(rendered, "Table\n| Column1 | Column2 |\n| --- | --- |\n| Row1-1 | Row1-2 |")
+    }
+
     func testHtmlLooksLikeChecklistDetectsLists() {
         let listHTML = "<ul><li>One</li><li>Two</li></ul>"
         let paragraphHTML = "<p>Just text</p>"

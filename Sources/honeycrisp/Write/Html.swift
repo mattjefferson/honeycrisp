@@ -198,4 +198,127 @@ extension Honeycrisp {
         ]
         return prefixes.contains { lower.hasPrefix($0) }
     }
+
+    static func plainTextFromHTML(_ html: String) -> String? {
+        let normalized = html
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+        guard let data = normalized.data(using: .utf8) else { return nil }
+        do {
+            let doc = try XMLDocument(data: data, options: [.documentTidyHTML])
+            guard let root = doc.rootElement() else { return nil }
+            let body = root.elements(forName: "body").first ?? root
+            let nodes = body.children ?? []
+
+            var lines: [String] = []
+            lines.reserveCapacity(nodes.count)
+
+            for node in nodes {
+                if let element = node as? XMLElement {
+                    if let table = findFirstElement(named: "table", in: element) {
+                        let tableLines = renderTableMarkdown(table)
+                        if !tableLines.isEmpty {
+                            lines.append(contentsOf: tableLines)
+                        }
+                        continue
+                    }
+                    let tag = element.name?.lowercased() ?? ""
+                    if tag == "br" {
+                        lines.append("")
+                        continue
+                    }
+                    if tag == "div", element.children?.contains(where: { ($0 as? XMLElement)?.name?.lowercased() == "br" }) == true {
+                        lines.append("")
+                        continue
+                    }
+                    let text = normalizeInlineText(element.stringValue ?? "")
+                    if !text.isEmpty {
+                        lines.append(text)
+                    }
+                    continue
+                }
+                if node.kind == .text {
+                    let text = normalizeInlineText(node.stringValue ?? "")
+                    if !text.isEmpty {
+                        lines.append(text)
+                    }
+                }
+            }
+
+            return lines.joined(separator: "\n")
+        } catch {
+            return nil
+        }
+    }
+
+    private static func renderTableMarkdown(_ table: XMLElement) -> [String] {
+        let rows = tableElements(named: "tr", in: table)
+        guard !rows.isEmpty else { return [] }
+        var tableRows: [[String]] = []
+        tableRows.reserveCapacity(rows.count)
+
+        for row in rows {
+            let cells = row.elements(forName: "th") + row.elements(forName: "td")
+            if cells.isEmpty { continue }
+            let values = cells.map { cell in
+                let raw = normalizeInlineText(cell.stringValue ?? "")
+                return raw.replacingOccurrences(of: "|", with: "\\|")
+            }
+            tableRows.append(values)
+        }
+        guard !tableRows.isEmpty else { return [] }
+
+        let columnCount = tableRows.map { $0.count }.max() ?? 0
+        let padded = tableRows.map { row -> [String] in
+            if row.count >= columnCount { return row }
+            return row + Array(repeating: "", count: columnCount - row.count)
+        }
+        guard let header = padded.first else { return [] }
+
+        let divider = Array(repeating: "---", count: columnCount)
+        var lines: [String] = []
+        lines.append("| " + header.joined(separator: " | ") + " |")
+        lines.append("| " + divider.joined(separator: " | ") + " |")
+        if padded.count > 1 {
+            for row in padded.dropFirst() {
+                lines.append("| " + row.joined(separator: " | ") + " |")
+            }
+        }
+        return lines
+    }
+
+    private static func tableElements(named name: String, in element: XMLElement) -> [XMLElement] {
+        var results: [XMLElement] = []
+        if element.name?.lowercased() == name {
+            results.append(element)
+        }
+        for child in element.children ?? [] {
+            if let childElement = child as? XMLElement {
+                results.append(contentsOf: tableElements(named: name, in: childElement))
+            }
+        }
+        return results
+    }
+
+    private static func findFirstElement(named name: String, in element: XMLElement) -> XMLElement? {
+        if element.name?.lowercased() == name {
+            return element
+        }
+        for child in element.children ?? [] {
+            if let childElement = child as? XMLElement {
+                if let found = findFirstElement(named: name, in: childElement) {
+                    return found
+                }
+            }
+        }
+        return nil
+    }
+
+    private static func normalizeInlineText(_ text: String) -> String {
+        let parts = text
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\t", with: " ")
+            .split(separator: " ", omittingEmptySubsequences: true)
+        return parts.joined(separator: " ")
+    }
 }

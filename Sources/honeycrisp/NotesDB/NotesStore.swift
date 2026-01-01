@@ -6,6 +6,7 @@ final class NotesStore {
     private let db: SQLiteDB
     private let keys: [String: Int]
     private let columns: Set<String>
+    private let storeUUID: String?
     private let accountsByID: [Int64: AccountRecord]
     private let foldersByID: [Int64: FolderRecord]
     private let folderPaths: [Int64: String]
@@ -16,12 +17,13 @@ final class NotesStore {
 
     private static let coreTimeOffset: TimeInterval = 978307200
 
-    private init(container: NotesContainer, snapshotURL: URL, db: SQLiteDB, keys: [String: Int], columns: Set<String>, accounts: [AccountRecord], folders: [FolderRecord]) {
+    private init(container: NotesContainer, snapshotURL: URL, db: SQLiteDB, keys: [String: Int], columns: Set<String>, storeUUID: String?, accounts: [AccountRecord], folders: [FolderRecord]) {
         self.container = container
         self.snapshotURL = snapshotURL
         self.db = db
         self.keys = keys
         self.columns = columns
+        self.storeUUID = storeUUID
 
         var accountsByID: [Int64: AccountRecord] = [:]
         var accountNamesByID: [Int64: String] = [:]
@@ -70,9 +72,10 @@ final class NotesStore {
         let db = try SQLiteDB(path: snapshotURL.path, readonly: true)
         let columns = try db.tableColumns("ziccloudsyncingobject")
         let keys = try NotesStore.loadKeys(db)
+        let storeUUID = try NotesStore.loadStoreUUID(db)
         let accounts = try NotesStore.loadAccounts(db, keys: keys)
         let folders = try NotesStore.loadFolders(db, keys: keys)
-        return NotesStore(container: container, snapshotURL: snapshotURL, db: db, keys: keys, columns: columns, accounts: accounts, folders: folders)
+        return NotesStore(container: container, snapshotURL: snapshotURL, db: db, keys: keys, columns: columns, storeUUID: storeUUID, accounts: accounts, folders: folders)
     }
 
     func close() {
@@ -174,6 +177,33 @@ final class NotesStore {
             attachments: attachments,
             body: bodyText
         )
+    }
+
+    func coreDataID(forNote id: Int64) -> String? {
+        guard let storeUUID, !storeUUID.isEmpty else { return nil }
+        return "x-coredata://\(storeUUID)/ICNote/p\(id)"
+    }
+
+    func noteHasTableAttachment(id: Int64) -> Bool {
+        let noteEnt = keys["ICNote"] ?? 0
+        var conditions: [String] = []
+        if columns.contains("ZTYPEUTI") {
+            conditions.append("ztypeuti = ?")
+        }
+        if columns.contains("ZTYPEUTI1") {
+            conditions.append("ztypeuti1 = ?")
+        }
+        guard !conditions.isEmpty else { return false }
+        let sql = "SELECT 1 FROM ziccloudsyncingobject WHERE znote = ? AND z_ent != ? AND (\(conditions.joined(separator: " OR "))) LIMIT 1"
+        var bindings: [SQLiteValue] = [.integer(id), .integer(Int64(noteEnt))]
+        for _ in conditions {
+            bindings.append(.text("com.apple.notes.table"))
+        }
+        do {
+            return try db.queryOne(sql, bindings) != nil
+        } catch {
+            return false
+        }
     }
 
     private func folderShared(folderID: Int64) -> Bool? {
@@ -404,6 +434,11 @@ final class NotesStore {
             }
         }
         return result
+    }
+
+    private static func loadStoreUUID(_ db: SQLiteDB) throws -> String? {
+        guard let row = try db.queryOne("SELECT z_uuid FROM z_metadata LIMIT 1") else { return nil }
+        return row.string("Z_UUID")
     }
 
     private static func loadAccounts(_ db: SQLiteDB, keys: [String: Int]) throws -> [AccountRecord] {

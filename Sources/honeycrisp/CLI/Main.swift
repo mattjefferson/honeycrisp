@@ -188,13 +188,14 @@ struct Honeycrisp {
         let noteID = try resolveNotePK(parsed, commandName: "show", selectorTitleOption: nil, account: account, folder: folder, store: store)
         let detail = try store.noteDetail(id: noteID)
         let wantsMarkdown = parsed.flags.contains("--markdown")
-        let tags = extractTags(from: detail.body)
+        let resolvedBody = resolvedNoteBody(detail: detail, noteID: noteID, store: store)
+        let tags = extractTags(from: resolvedBody)
 
         let bodyText: String
         if wantsMarkdown {
-            bodyText = markdownFrom(title: detail.title, body: detail.body)
+            bodyText = markdownFrom(title: detail.title, body: resolvedBody)
         } else {
-            bodyText = detail.body
+            bodyText = resolvedBody
         }
 
         if wantsJSON(parsed) {
@@ -387,12 +388,13 @@ struct Honeycrisp {
         let noteID = try resolveNotePK(parsed, commandName: "export", selectorTitleOption: nil, account: account, folder: folder, store: store)
         let detail = try store.noteDetail(id: noteID)
         let wantsMarkdown = parsed.flags.contains("--markdown")
+        let resolvedBody = resolvedNoteBody(detail: detail, noteID: noteID, store: store)
 
         let content: String
         if wantsMarkdown {
-            content = markdownFrom(title: detail.title, body: detail.body)
+            content = markdownFrom(title: detail.title, body: resolvedBody)
         } else {
-            content = detail.body
+            content = resolvedBody
         }
 
         if wantsJSON(parsed) {

@@ -51,6 +51,14 @@ extension Honeycrisp {
         return "# \(titleText)\n\n\(trimmedBody)"
     }
 
+    static func resolvedNoteBody(detail: NoteDetailRecord, noteID: Int64, store: NotesStore) -> String {
+        guard store.noteHasTableAttachment(id: noteID) else { return detail.body }
+        guard let coreDataID = store.coreDataID(forNote: noteID) else { return detail.body }
+        guard let html = try? AppleScriptWriter.run(AppleScriptWriter.getNoteBody(id: coreDataID)) else { return detail.body }
+        guard let rendered = plainTextFromHTML(html), !rendered.isEmpty else { return detail.body }
+        return rendered
+    }
+
     static func formatDate(_ date: Date) -> String {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
