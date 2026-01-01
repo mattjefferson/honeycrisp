@@ -154,6 +154,7 @@ final class NotesStore {
         }
 
         let body = try noteBody(id: id)
+        let bodyText = row.hasChecklist ? Honeycrisp.renderChecklistPlainText(body, title: row.title) : body
         let attachments = try fetchAttachments(noteID: id)
         let folderName = row.folderID.flatMap { folderNamesByID[$0] }
         let folderPath = row.folderID.flatMap { folderPaths[$0] }
@@ -171,7 +172,7 @@ final class NotesStore {
             shared: row.shared,
             folderShared: isFolderShared,
             attachments: attachments,
-            body: body
+            body: bodyText
         )
     }
 
@@ -221,13 +222,17 @@ final class NotesStore {
         let hasAccount = columns.contains("ZACCOUNT")
         let hasShared = columns.contains("ZSHARED")
         let hasPassword = columns.contains("ZISPASSWORDPROTECTED")
+        let hasChecklist = columns.contains("ZHASCHECKLIST")
+        let hasChecklistInProgress = columns.contains("ZHASCHECKLISTINPROGRESS")
         let created2 = columns.contains("ZCREATIONDATE2") ? "zcreationdate2" : "NULL AS zcreationdate2"
         let created3 = columns.contains("ZCREATIONDATE3") ? "zcreationdate3" : "NULL AS zcreationdate3"
         let accountCol = hasAccount ? "zaccount" : "NULL AS zaccount"
         let sharedCol = hasShared ? "zshared" : "NULL AS zshared"
         let passwordCol = hasPassword ? "zispasswordprotected" : "NULL AS zispasswordprotected"
+        let checklistCol = hasChecklist ? "zhaschecklist" : "NULL AS zhaschecklist"
+        let checklistProgressCol = hasChecklistInProgress ? "zhaschecklistinprogress" : "NULL AS zhaschecklistinprogress"
 
-        var query = "SELECT z_pk, ztitle1, zfolder, zcreationdate1, \(created2), \(created3), zmodificationdate1, \(accountCol), \(sharedCol), \(passwordCol) FROM ziccloudsyncingobject WHERE z_ent = ? AND ztitle1 IS NOT NULL"
+        var query = "SELECT z_pk, ztitle1, zfolder, zcreationdate1, \(created2), \(created3), zmodificationdate1, \(accountCol), \(sharedCol), \(passwordCol), \(checklistCol), \(checklistProgressCol) FROM ziccloudsyncingobject WHERE z_ent = ? AND ztitle1 IS NOT NULL"
         var bindings: [SQLiteValue] = [.integer(Int64(noteEnt))]
 
         if let specificID {
@@ -371,6 +376,7 @@ final class NotesStore {
         let shared = row.bool("ZSHARED")
         let accountID = row.int64("ZACCOUNT")
         let isPasswordProtected = row.bool("ZISPASSWORDPROTECTED") ?? false
+        let hasChecklist = (row.bool("ZHASCHECKLIST") ?? false) || (row.bool("ZHASCHECKLISTINPROGRESS") ?? false)
 
         let createdValue = created3 > 0 ? created3 : (created2 > 0 ? created2 : created1)
         let createdDate = decodeTime(createdValue)
@@ -384,7 +390,8 @@ final class NotesStore {
             modified: modifiedDate,
             accountID: accountID,
             shared: shared,
-            isPasswordProtected: isPasswordProtected
+            isPasswordProtected: isPasswordProtected,
+            hasChecklist: hasChecklist
         )
     }
 

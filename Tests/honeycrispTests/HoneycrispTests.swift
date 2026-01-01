@@ -55,6 +55,12 @@ final class HoneycrispTests: XCTestCase {
         XCTAssertEqual(normalized, "[ ] one\n  [ ] two\nplain")
     }
 
+    func testRenderChecklistPlainTextConvertsLinesAfterTitle() {
+        let text = "Snowbird List\nCPAP\nFirestick"
+        let rendered = Honeycrisp.renderChecklistPlainText(text, title: "Snowbird List")
+        XCTAssertEqual(rendered, "Snowbird List\n[ ] CPAP\n[ ] Firestick")
+    }
+
     func testHtmlLooksLikeChecklistDetectsLists() {
         let listHTML = "<ul><li>One</li><li>Two</li></ul>"
         let paragraphHTML = "<p>Just text</p>"

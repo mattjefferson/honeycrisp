@@ -23,6 +23,7 @@ struct NoteRecord {
     let accountID: Int64?
     let shared: Bool?
     let isPasswordProtected: Bool
+    let hasChecklist: Bool
 }
 
 struct NoteDetailRecord {

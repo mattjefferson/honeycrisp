@@ -144,4 +144,58 @@ extension Honeycrisp {
         }
         return "\(indent)\(prefix) \(afterBullet)"
     }
+
+    static func renderChecklistPlainText(_ text: String, title: String?) -> String {
+        let normalized = text
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+        let lines = normalized.split(separator: "\n", omittingEmptySubsequences: false)
+        var output: [String] = []
+        output.reserveCapacity(lines.count)
+
+        let titleTrimmed = title?.trimmingCharacters(in: .whitespacesAndNewlines)
+        var skippedTitle = false
+
+        for raw in lines {
+            let line = String(raw)
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty {
+                output.append(line)
+                continue
+            }
+            if !skippedTitle, let titleTrimmed, trimmed == titleTrimmed {
+                output.append(line)
+                skippedTitle = true
+                continue
+            }
+            if lineHasChecklistPrefix(trimmed) {
+                output.append(line)
+                continue
+            }
+            if let normalizedBullet = normalizeBulletLine(line) {
+                output.append(normalizedBullet)
+                continue
+            }
+
+            let indent = line.prefix { $0 == " " || $0 == "\t" }
+            output.append("\(indent)[ ] \(trimmed)")
+        }
+
+        return output.joined(separator: "\n")
+    }
+
+    private static func lineHasChecklistPrefix(_ trimmed: String) -> Bool {
+        let lower = trimmed.lowercased()
+        let prefixes = [
+            "[ ]",
+            "[x]",
+            "- [ ]",
+            "- [x]",
+            "* [ ]",
+            "* [x]",
+            "+ [ ]",
+            "+ [x]"
+        ]
+        return prefixes.contains { lower.hasPrefix($0) }
+    }
 }
