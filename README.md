@@ -22,7 +22,7 @@ honeycrisp list --accounts [--limit N] [--json] [--notes-path PATH]
 honeycrisp list --folders [--account NAME] [--limit N] [--json] [--notes-path PATH]
 honeycrisp search QUERY [--account NAME] [--folder NAME] [--limit N] [--json] [--notes-path PATH]
 honeycrisp show NOTE [--id NOTE_ID] [--account NAME] [--folder NAME] [--markdown] [--json] [--notes-path PATH]
-honeycrisp add TITLE [--account NAME] [--folder NAME] [--body TEXT] [--json]
+honeycrisp add TITLE [TEXT...] [--account NAME] [--folder NAME] [--body TEXT] [--json]
 honeycrisp add TITLE [--account NAME] [--folder NAME] [--json] < body.txt
 honeycrisp update NOTE [--id NOTE_ID] [--title TEXT] [--body TEXT] [--account NAME] [--folder NAME] [--json]
 honeycrisp update NOTE [--id NOTE_ID] [--title TEXT] [--account NAME] [--folder NAME] [--json] < body.txt
@@ -53,6 +53,7 @@ Examples:
 honeycrisp export "Grocery List" --markdown
 honeycrisp show "Weekly-20251116" --markdown
 honeycrisp export "Weekly-20251116" --markdown
+honeycrisp add "GiddyUp" "I like this thing"
 honeycrisp append "Grocery List" "Buy lemons"
 honeycrisp append "Snowbird List" --body "Extra socks"
 honeycrisp list --accounts

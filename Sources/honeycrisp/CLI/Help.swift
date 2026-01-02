@@ -12,7 +12,7 @@ Usage:
   honeycrisp list --folders [--account NAME] [--limit N] [--json] [--notes-path PATH]
   honeycrisp search QUERY [--account NAME] [--folder NAME] [--limit N] [--json] [--notes-path PATH]
   honeycrisp show NOTE [--id NOTE_ID] [--account NAME] [--folder NAME] [--markdown] [--json] [--notes-path PATH]
-  honeycrisp add TITLE [--account NAME] [--folder NAME] [--body TEXT] [--json]
+  honeycrisp add TITLE [TEXT...] [--account NAME] [--folder NAME] [--body TEXT] [--json]
   honeycrisp add TITLE [--account NAME] [--folder NAME] [--json] < body.txt
   honeycrisp update NOTE [--id NOTE_ID] [--title TEXT] [--body TEXT] [--account NAME] [--folder NAME] [--json]
   honeycrisp update NOTE [--id NOTE_ID] [--title TEXT] [--account NAME] [--folder NAME] [--json] < body.txt
@@ -37,6 +37,7 @@ Notes:
   For update, NOTE selects the note and --title sets the new title.
   Notes in "Recently Deleted" are excluded unless you pass --folder "Recently Deleted".
   --notes-path may point to the group.com.apple.notes folder or NoteStore.sqlite.
+  add accepts body text via --body, trailing args, or stdin.
 """
         print(help)
     }
