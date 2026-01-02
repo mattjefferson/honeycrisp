@@ -237,7 +237,6 @@ struct Honeycrisp {
             print(plain)
         }
     }
-
     static func cmdAdd(_ parsed: ParsedArgs) throws {
         let title = parsed.positionals.first
         guard let title, !title.isEmpty else {
@@ -246,23 +245,23 @@ struct Honeycrisp {
 
         let account = try optionValue(parsed, "--account")
         let folder = try optionValue(parsed, "--folder")
-
         let body: String
         if let bodyArg = try optionValue(parsed, "--body") {
             body = bodyArg
+        } else if parsed.positionals.count > 1 {
+            body = parsed.positionals.dropFirst().joined(separator: " ")
         } else if !isStdinTTY() {
             body = readStdin()
         } else {
             body = ""
         }
-
         let output = try AppleScriptWriter.run(AppleScriptWriter.addNote(title: title, body: body, folder: folder, account: account))
         let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty {
             throw CLIError(message: "Failed to create note")
         }
         if wantsJSON(parsed) {
-            let result = OperationResult(ok: true, action: "add", title: title)
+            let result = OperationResult(ok: true, action: "add", title: title, id: trimmed)
             try outputJSON(result)
             return
         }
@@ -303,7 +302,7 @@ struct Honeycrisp {
             throw CLIError(message: "Failed to update note")
         }
         if wantsJSON(parsed) {
-            let result = OperationResult(ok: true, action: "update", title: title)
+            let result = OperationResult(ok: true, action: "update", title: title, id: trimmed)
             try outputJSON(result)
             return
         }
@@ -329,7 +328,7 @@ struct Honeycrisp {
             throw CLIError(message: "Failed to delete note")
         }
         if wantsJSON(parsed) {
-            let result = OperationResult(ok: true, action: "delete", title: nil)
+            let result = OperationResult(ok: true, action: "delete", title: nil, id: trimmed)
             try outputJSON(result)
             return
         }
@@ -368,7 +367,7 @@ struct Honeycrisp {
             throw CLIError(message: "Failed to append to note")
         }
         if wantsJSON(parsed) {
-            let result = OperationResult(ok: true, action: "append", title: trimmed)
+            let result = OperationResult(ok: true, action: "append", title: trimmed, id: nil)
             try outputJSON(result)
             return
         }

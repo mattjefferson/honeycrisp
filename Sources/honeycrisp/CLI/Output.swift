@@ -37,6 +37,7 @@ struct OperationResult: Codable {
     let ok: Bool
     let action: String
     let title: String?
+    let id: String?
 }
 
 struct ExportResult: Codable {
